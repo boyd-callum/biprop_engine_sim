@@ -1,0 +1,6 @@
+# List of required python packages for the engine simulator to function
+
+CoolProp
+rocketcea
+matplotlib
+tqdm
