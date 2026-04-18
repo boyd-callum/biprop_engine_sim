@@ -49,7 +49,7 @@ class Fluid:
     def get_molar_mass(self) -> float:
         return PropsSI("MOLARMASS", self.coolprop_key)
     
-    
+
     def get_R(self) -> float:
         # specific gas constant
         return R_UNIVERSAL / self.get_molar_mass()
@@ -62,17 +62,51 @@ class Fluid:
 
         return cp / cv
     
+    def get_Ttriple(self) -> float:
+        # returns the triple point temperature
+        return PropsSI("Ttriple", self.coolprop_key)
+    
+    def get_Tcrit(self) -> float:
+        # returns critical temperature
+        return PropsSI("Tcrit", self.coolprop_key)
+    
+    def get_Ptriple(self) -> float:
+        # returns the triple point pressure
+        return PropsSI("Ptriple", self.coolprop_key)
 
-    def get_saturation_properties(self, T: float):
+    def get_Pcrit(self) -> float:
+        # returns critical pressure
+        return PropsSI("Pcrit", self.coolprop_key)
+
+    def get_saturation_properties_from_temp(self, T: float):
         # returns saturated liquid/vapour properties at a given temp (valid below Tcrit)
 
-        return dict(
-            psat=PropsSI("P", "T", T, "Q", 0.0, self.coolprop_key),
-            vf=1.0 / PropsSI("D", "T", T, "Q", 0.0, self.coolprop_key),
-            vg=1.0 / PropsSI("D", "T", T, "Q", 1.0, self.coolprop_key),
-            uf=PropsSI("U", "T", T, "Q", 0.0, self.coolprop_key),
-            ug=PropsSI("U", "T", T, "Q", 1.0, self.coolprop_key),
-            hf=PropsSI("H", "T", T, "Q", 0.0, self.coolprop_key),
-            hg=PropsSI("H", "T", T, "Q", 1.0, self.coolprop_key),
-        )
-    
+        Ttriple = self.get_Ttriple()
+        Tcrit = self.get_Tcrit()
+
+        if T > Ttriple and T < Tcrit:
+            return dict(
+                psat=PropsSI("P", "T", T, "Q", 0.0, self.coolprop_key),
+                tsat = T,
+                vf=1.0 / PropsSI("D", "T", T, "Q", 0.0, self.coolprop_key),
+                vg=1.0 / PropsSI("D", "T", T, "Q", 1.0, self.coolprop_key),
+                uf=PropsSI("U", "T", T, "Q", 0.0, self.coolprop_key),
+                ug=PropsSI("U", "T", T, "Q", 1.0, self.coolprop_key),
+                hf=PropsSI("H", "T", T, "Q", 0.0, self.coolprop_key),
+                hg=PropsSI("H", "T", T, "Q", 1.0, self.coolprop_key),
+            )
+        else:
+            raise ValueError(f"{self.name} temperature ({T} K) is not between the Triple point ({Ttriple} K) and Critical Point ({Tcrit} K).")
+
+    def get_saturation_properties_from_pressure(self, P: float):
+
+        Ptriple = self.get_Ptriple()
+        Pcrit = self.get_Pcrit()
+
+        if P > Ptriple and P < Pcrit:
+            Tsat = PropsSI("T", "P", P, "Q", 0.0, self.coolprop_key)
+            sat_props = self.get_saturation_properties_from_temp(Tsat)
+            return sat_props
+
+        else:
+            raise ValueError(f"{self.name} pressure ({P} Pa) is not between the Triple point ({Ptriple} Pa) and Critical Point ({Pcrit} Pa).")

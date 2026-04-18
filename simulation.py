@@ -5,6 +5,7 @@ from typing import Literal
 
 from tanks import TankState
 from engine import EngineState
+from cases import SimCase, n2o_blowdown_case
 
 # -------------------------------
 # Dataclasses for the simulation running
@@ -20,3 +21,10 @@ class SimPoint:
     engine: EngineState
     tanks: dict[str, TankState]
     
+
+
+def blowdown_simulate(
+        case: SimCase,
+        record: bool = True
+):
+    return None
