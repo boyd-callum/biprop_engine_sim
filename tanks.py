@@ -44,7 +44,6 @@ class TankConfig:
     fluid: Fluid
     tank_volume_m3: float
     phase_model: PhaseModel = 'unknown'
-    injector: InjectorConfig | None = None
 
 
     def _initialise_self_pressurised_tank_from_pressure_mass(
@@ -90,7 +89,6 @@ class TankConfig:
         volume_error = abs(vapour_volume_m3 - ullage_volume_m3)
         if volume_error > 1e-7:
             raise ValueError(f"Volume calculation failed. Volume error of {volume_error} m^3.")
-
 
         return TankState(
             config=self,
@@ -138,7 +136,5 @@ class TankState:
     ullage_volume_m3: float | None = None
     liquid_volume_m3: float | None = None
 
-    mass_flow_out_kg_s: float | None = None
-    injector_pressure_drop_pa: float | None = None
 
 

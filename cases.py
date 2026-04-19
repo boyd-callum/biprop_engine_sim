@@ -25,6 +25,8 @@ class SimCase:
     tank_configs: dict[str, TankConfig]
     tank_initial_conditions: dict[str, TankInitialCondition]
 
+    injector_configs: dict[str, InjectorConfig]
+
     engine_config: EngineConfig | None = None
 
     # sim settings
@@ -64,8 +66,7 @@ n2o_tank = TankConfig(
     role="oxidiser",
     fluid=NITROUS_OXIDE,
     tank_volume_m3=0.01,    # 10L
-    phase_model="self_pressurised",
-    injector=test_injector
+    phase_model="self_pressurised"
 )
 
 n2o_tank_initial = TankInitialCondition(
@@ -81,6 +82,7 @@ n2o_blowdown_case = SimCase(
     name="n2o_blowdown_test",
     tank_configs={"n2o_tank": n2o_tank},
     tank_initial_conditions={"n2o_tank": n2o_tank_initial},
+    injector_configs={"test_injector":test_injector},
     engine_config=None,
     settings=SimulationSettings(0.01, 20)
 )
