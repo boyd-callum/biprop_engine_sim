@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from injector import InjectorConfig
 from fluid import Fluid
 
 # -------------------------------
@@ -45,6 +44,7 @@ class TankConfig:
     tank_volume_m3: float
     phase_model: PhaseModel = 'unknown'
     state: TankState | None = None
+
 
     def calculate_internal_energy(
             self,
@@ -204,9 +204,18 @@ class TankConfig:
         mass_vapour_kg = (self.tank_volume_m3 - total_mass_kg*vf)/ (vg - vf)
         mass_liquid_kg = total_mass_kg - mass_vapour_kg
 
-        liquid_volume_m3 = mass_liquid_kg * vf
-        vapour_volume_m3 = mass_vapour_kg * vg
-        ullage_volume_m3 = self.tank_volume_m3 - mass_liquid_kg * vf
+        if mass_liquid_kg < 0.0:
+            mass_liquid_kg = 0.0
+            mass_vapour_kg = total_mass_kg
+
+        if mass_liquid_kg != 0.0:
+            liquid_volume_m3 = mass_liquid_kg * vf
+            vapour_volume_m3 = mass_vapour_kg * vg
+            ullage_volume_m3 = self.tank_volume_m3 - mass_liquid_kg * vf
+        else:
+            liquid_volume_m3 = 0.0
+            vapour_volume_m3 = self.tank_volume_m3
+            ullage_volume_m3 = self.tank_volume_m3
 
 
         # validate the volumes

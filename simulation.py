@@ -57,16 +57,30 @@ def blowdown_advance_timestep(
     # find the mass flow rate through the injector at the current tank pressure and temperature
 
     injector_mdot_kg_s = injector_config.get_liquid_mdot_kg_s(
-        upstream_pressure_pa=tank_pressure_pa,
-        downstream_pressure_pa=AMTOSPHERE_PRESSURE_PA,  # assume atmospheric pressure downstream
-        liquid_density_kg_m3=liquid_density_kg_m3
+        tank_state=tank_config.state,
+        downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
     )
 
     # find the mass of fluid leaving the tank during this timestep
     mass_out_kg = injector_mdot_kg_s * dt_s
 
-    # find energy leaving the tank during this timestep, assuming the fluid leaving is saturated liquid at the tank temperature
+     # find energy leaving the tank during this timestep, assuming the fluid leaving is saturated liquid at the tank temperature
     energy_out_j = mass_out_kg * saturation_properties['uf']
+
+    if tank_config.state.liquid_mass_kg is None:
+        raise ValueError("Tank state is missing liquid mass.")
+
+    # if the mass leaving the tank is greater than the liquid mass in the tank, we have flow of vapour through the injector, so we need to calculate the gas mass flow rate instead
+
+    if mass_out_kg > tank_config.state.liquid_mass_kg:
+        injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
+            tank_state=tank_config.state,
+            downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+        )
+        mass_out_kg = injector_mdot_kg_s * dt_s
+        energy_out_j = mass_out_kg * saturation_properties['ug']
+
+   
 
     # find new total mass and internal energy in the tank
     new_total_mass_kg = tank_config.state.total_mass_kg - mass_out_kg
@@ -151,7 +165,7 @@ def blowdown_simulate(
 
 
         # end simulation if tank pressure drops to 110% of atmo pressure
-        if tank_config.state.pressure_pa is not None and tank_config.state.pressure_pa <= AMTOSPHERE_PRESSURE_PA*1.1:
+        if tank_config.state.pressure_pa is not None and tank_config.state.pressure_pa <= ATMOSPHERE_PRESSURE_PA*1.5:
             
             print(f"Tank pressure equals 110% of atmospheric at time {time_s:.2f} s, ending simulation.")
             break

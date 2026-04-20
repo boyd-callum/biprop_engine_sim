@@ -25,8 +25,8 @@ class Fluid:
 
     @property
     def coolprop_key(self) -> str:
-        #return f"{self.backend}::{self.coolprop_name}"
-        return self.coolprop_name
+        return f"{self.backend}::{self.coolprop_name}"
+        # return self.coolprop_name
     
     
     def props_si(
@@ -58,8 +58,8 @@ class Fluid:
 
     def get_gamma_at_PT(self, P: float, T: float) -> float:
         # ratio of specific heats at some given pressure and temperature
-        cp = PropsSI("Cpmass", "P", P, "T", T, self.coolprop_key)
-        cv = PropsSI("Cvmass", "P", P, "T", T, self.coolprop_key)
+        cp = PropsSI("Cpmass", "T", T, "Q", 1.0, self.coolprop_key)
+        cv = PropsSI("Cvmass", "T", T, "Q", 1.0, self.coolprop_key)
 
         return cp / cv
     
