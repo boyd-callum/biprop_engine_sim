@@ -89,7 +89,9 @@ if __name__ == "__main__":
     axs[1, 2].plot(time_s_list, total_energy_j_list)
     axs[1, 2].set_title("Total Internal Energy (J)")
     plt.tight_layout()
+    fig.savefig("blowdown_test_results.png", dpi=300)
     plt.show()
+
 
 
     log_results("blowdown_test_results.csv", sim_record)

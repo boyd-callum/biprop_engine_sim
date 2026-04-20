@@ -57,22 +57,22 @@ NITROGEN = Fluid(
 )
 
 test_injector = InjectorConfig(
-    cd=0.75,
-    area_m2=5e-5
+    cd=0.65,
+    area_m2=6.234e-5
 )
 
 n2o_tank = TankConfig(
     name="Nitrous Oxide Tank",
     role="oxidiser",
     fluid=NITROUS_OXIDE,
-    tank_volume_m3=0.01,    # 10L
+    tank_volume_m3=0.0088,    # 10L
     phase_model="self_pressurised"
 )
 
 n2o_tank_initial = TankInitialCondition(
     mode="pressure_mass",
-    pressure_pa=6e+6,    # 60 bar
-    total_mass_kg=6.0
+    pressure_pa=6.5e+6,    # 65 bar
+    total_mass_kg=5.85
 )  
 
 #------------------------------
