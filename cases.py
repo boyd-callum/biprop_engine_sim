@@ -58,7 +58,7 @@ NITROGEN = Fluid(
 
 test_injector = InjectorConfig(
     cd=0.75,
-    area_m2=1e-5
+    area_m2=5e-5
 )
 
 n2o_tank = TankConfig(

@@ -25,7 +25,8 @@ class Fluid:
 
     @property
     def coolprop_key(self) -> str:
-        return f"{self.backend}::{self.coolprop_name}"
+        #return f"{self.backend}::{self.coolprop_name}"
+        return self.coolprop_name
     
     
     def props_si(
@@ -72,11 +73,11 @@ class Fluid:
     
     def get_Ptriple(self) -> float:
         # returns the triple point pressure
-        return PropsSI("Ptriple", self.coolprop_key)
+        return PropsSI("ptriple", self.coolprop_key)
 
     def get_Pcrit(self) -> float:
         # returns critical pressure
-        return PropsSI("Pcrit", self.coolprop_key)
+        return PropsSI("pcrit", self.coolprop_key)
 
     def get_saturation_properties_from_temp(self, T: float):
         # returns saturated liquid/vapour properties at a given temp (valid below Tcrit)
