@@ -58,30 +58,56 @@ NITROGEN = Fluid(
 
 test_injector = InjectorConfig(
     cd=0.65,
-    area_m2=6.234e-5
+    area_m2=6.234e-5,
+    k=2 # approximation
 )
 
 n2o_tank = TankConfig(
     name="Nitrous Oxide Tank",
     role="oxidiser",
     fluid=NITROUS_OXIDE,
-    tank_volume_m3=0.0088,    # 10L
+    tank_volume_m3=0.0088,    # 8.8L
     phase_model="self_pressurised"
 )
 
 n2o_tank_initial = TankInitialCondition(
     mode="pressure_mass",
-    pressure_pa=6.5e+6,    # 65 bar
+    pressure_pa=60e+5,    # 70 bar
     total_mass_kg=5.85
 )  
 
+n2_tank = TankConfig(
+    name="Nitrogen Tank",
+    role="pressurant",
+    fluid=NITROGEN,
+    tank_volume_m3=0.002,    # 2L
+    phase_model="gas"
+)
+
+n2_tank_initial = TankInitialCondition(
+    mode="pressure_temperature",
+    pressure_pa=300e5,   # 300 bar
+    temperature_k=293.15 # 20C
+)
+
 #------------------------------
-# N2O Blowdown case
+# Cases
 
 n2o_blowdown_case = SimCase(
     name="n2o_blowdown_test",
     tank_configs={"n2o_tank": n2o_tank},
     tank_initial_conditions={"n2o_tank": n2o_tank_initial},
+    injector_configs={"test_injector":test_injector},
+    engine_config=None,
+    settings=SimulationSettings(0.01, 20)
+)
+
+
+
+n2_blowdown_case = SimCase(
+    name="n2_blowdown_test",
+    tank_configs={"n2_tank": n2_tank},
+    tank_initial_conditions={"n2_tank": n2_tank_initial},
     injector_configs={"test_injector":test_injector},
     engine_config=None,
     settings=SimulationSettings(0.01, 20)

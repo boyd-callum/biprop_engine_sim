@@ -43,53 +43,93 @@ def blowdown_advance_timestep(
     if tank_config.state.total_mass_kg is None or tank_config.state.total_internal_energy_j is None:
         raise ValueError("Tank state is missing total mass or total internal energy.")
 
+    downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+
+
     # find current tank pressure and temperature
 
     tank_pressure_pa = tank_config.state.pressure_pa
     tank_temperature_k = tank_config.state.temperature_k
 
     # find the saturation properties at the current tank temperature, to determine the density of the liquid phase in the tank
-
     saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(tank_temperature_k)
-
-    liquid_density_kg_m3 = 1.0/saturation_properties['vf']
-
-    # find the mass flow rate through the injector at the current tank pressure and temperature
-
-    injector_mdot_kg_s = injector_config.get_liquid_mdot_kg_s(
-        tank_state=tank_config.state,
-        downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
-    )
-
-    # find the mass of fluid leaving the tank during this timestep
-    mass_out_kg = injector_mdot_kg_s * dt_s
-
-     # find energy leaving the tank during this timestep, assuming the fluid leaving is saturated liquid at the tank temperature
-    energy_out_j = mass_out_kg * saturation_properties['uf']
+    
 
     if tank_config.state.liquid_mass_kg is None:
         raise ValueError("Tank state is missing liquid mass.")
+    
+    liquid_mass_kg = tank_config.state.liquid_mass_kg
 
-    # if the mass leaving the tank is greater than the liquid mass in the tank, we have flow of vapour through the injector, so we need to calculate the gas mass flow rate instead
 
-    if mass_out_kg > tank_config.state.liquid_mass_kg:
+    # if any liquid remains at start of time step, estimate mdot via the dyer model
+
+    if liquid_mass_kg > 1e-9:
+
+        # find the saturation properties at the current tank temperature, to determine the density of the liquid phase in the tank
+        saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(tank_temperature_k)
+
+        prelim_mdot_kg_s = injector_config.get_dyer_mdot_kg_s(
+            tank_state=tank_config.state,
+            downstream_pressure_pa=downstream_pressure_pa
+        )
+
+        if liquid_mass_kg > prelim_mdot_kg_s * dt_s:
+            # entire timestep is liquid discharge through injector
+            injector_mdot_kg_s = prelim_mdot_kg_s
+            mass_out_kg = injector_mdot_kg_s*dt_s
+            energy_out_j = mass_out_kg * saturation_properties["hf"]
+
+        else:
+            # dryout occurs in this timestep
+            # flow out is still vapour, but the tank state at the start of the timestep is still saturated, so using saturated vapour enthalpy here
+
+            injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
+                tank_state=tank_config.state,
+                downstream_pressure_pa=downstream_pressure_pa
+            )
+            mass_out_kg = injector_mdot_kg_s*dt_s
+            energy_out_j = mass_out_kg*saturation_properties["hg"]
+
+    
+    else:
+        # tank was already gas-only at the start of the timestep
+
         injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
             tank_state=tank_config.state,
-            downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+            downstream_pressure_pa=downstream_pressure_pa
         )
-        mass_out_kg = injector_mdot_kg_s * dt_s
-        energy_out_j = mass_out_kg * saturation_properties['ug']
+        mass_out_kg = injector_mdot_kg_s*dt_s
 
+        # for a real gas-only state we aren't saturated, so need to use actual gas enthalpy
+        gas_density_kg_m3 = tank_config.state.total_mass_kg / tank_config.tank_volume_m3
+        gas_enthalpy_j_kg = tank_config.fluid.props_si(
+            "H", "D", gas_density_kg_m3, "T", tank_temperature_k
+        )
+
+        energy_out_j = mass_out_kg * gas_enthalpy_j_kg
    
 
     # find new total mass and internal energy in the tank
     new_total_mass_kg = tank_config.state.total_mass_kg - mass_out_kg
     new_total_internal_energy_j = tank_config.state.total_internal_energy_j - energy_out_j
 
+
+    # decide which tank-state solver to use for the new state
+    # if liquid still remains, stay on self-pressurised 2phase solver, otherwise switch to gas
+    liquid_remains_after_step = (
+        tank_config.phase_model == "self_pressurised"
+        and tank_config.state.liquid_mass_kg is not None
+        and tank_config.state.liquid_mass_kg > mass_out_kg + 1e-9
+    )
+
+    
+
     # update tank state based on the new mass and energy
     new_tank_state = tank_config.state_from_mass_and_energy(
         total_mass_kg=new_total_mass_kg,
-        total_internal_energy_j=new_total_internal_energy_j
+        total_internal_energy_j=new_total_internal_energy_j,
+        previous_state=tank_config.state,
+        phase_override="self_pressurised" if liquid_remains_after_step else "gas"
     )
 
     return new_tank_state, injector_mdot_kg_s
@@ -172,7 +212,7 @@ def blowdown_simulate(
         
         # print data for debugging
         if tank_config.state.pressure_pa is not None:
-            print(f"time: {time_s:.2f} s,   pressure: {tank_config.state.pressure_pa/1e5:.2f} bar")
+            print(f"time: {time_s:.2f} s,   pressure: {tank_config.state.pressure_pa/1e5:.2f} bar,  total mass: {tank_config.state.total_mass_kg:.2f} kg,    massout: {injector_mdot_kg_s*dt_s:.3f} kg")
 
     if record:
         return SimRecord(points=sim_points)

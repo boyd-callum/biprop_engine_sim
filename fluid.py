@@ -56,13 +56,48 @@ class Fluid:
         return R_UNIVERSAL / self.get_molar_mass()
     
 
-    def get_gamma_at_PT(self, P: float, T: float) -> float:
-        # ratio of specific heats at some given pressure and temperature
-        cp = PropsSI("Cpmass", "T", T, "Q", 1.0, self.coolprop_key)
-        cv = PropsSI("Cvmass", "T", T, "Q", 1.0, self.coolprop_key)
+    def get_gamma_at_PT(self, pressure_pa: float, temperature_k: float) -> float:
+        """"
+        Return gamma = cp/cv at given temp and pressure
 
-        return cp / cv
+        For nitrous, coolprop can fail if the state lies exactly on or close to the saturation curve, so this function nudges the state slightly into the vapour region before retrying
+        """
+        try:
+            # ratio of specific heats at some given pressure and temperature
+            cp = PropsSI("Cpmass", "P", pressure_pa, "T", temperature_k, self.coolprop_key)
+            cv = PropsSI("Cvmass", "P", pressure_pa, "T", temperature_k, self.coolprop_key)
+            
+            gamma = cp / cv
+
+            return gamma
+        except Exception as original_error:
+
+            try:
+                
+                psat = self.get_saturation_properties_from_temp(temperature_k)["psat"]
+
+                # if we are on/above saturation, nudge slightly into vapour region
+                nudged_pressure_pa = min(pressure_pa, 0.999 * psat)
+
+                cp = PropsSI("Cpmass", "P", nudged_pressure_pa, "T", temperature_k, self.coolprop_key)
+                cv = PropsSI("Cvmass", "P", nudged_pressure_pa, "T", temperature_k, self.coolprop_key)
+
+                gamma = cp / cv
+
+                return gamma
+
+            except Exception as fallback_error:
+                raise RuntimeError(
+                    "get_gamma_at_PT failed. Inputs: \n"
+                    f"Pressure: {pressure_pa:.2f} Pa\n"
+                    f"Temperature: {temperature_k:.2f} K\n"
+                    f"Original error: {original_error}\n"
+                    f"Fallback error: {fallback_error}"
+                    )
+
     
+
+
     def get_Ttriple(self) -> float:
         # returns the triple point temperature
         return PropsSI("Ttriple", self.coolprop_key)
@@ -111,3 +146,35 @@ class Fluid:
 
         else:
             raise ValueError(f"{self.name} pressure ({P} Pa) is not between the Triple point ({Ptriple} Pa) and Critical Point ({Pcrit} Pa).")
+    
+    def get_liquid_enthalpy_from_pressure(self, P: float) -> float:
+        """
+        returns enthalpy of fluid in the liquid phase, in J/kg
+        """
+        liquid_enthalpy_j_kg = PropsSI("H", "P", P, "Q", 0.0, self.coolprop_key)
+
+        return liquid_enthalpy_j_kg
+    
+    def get_vapour_enthalpy_from_pressure(self, P: float) -> float:
+        """
+        returns enthalpy of fluid in the vapour phase, in J/kg
+        """
+        vapour_enthalpy_j_kg = PropsSI("H", "P", P, "Q", 1.0, self.coolprop_key)
+
+        return vapour_enthalpy_j_kg
+    
+    def get_liquid_enthalpy_from_temperature(self, T: float) -> float:
+        """
+        returns enthalpy of fluid in the liquid phase, in J/kg
+        """
+        liquid_enthalpy_j_kg = PropsSI("H", "T", T, "Q", 0.0, self.coolprop_key)
+
+        return liquid_enthalpy_j_kg
+    
+    def get_vapour_enthalpy_from_temperature(self, T: float) -> float:
+        """
+        returns enthalpy of fluid in the vapour phase, in J/kg
+        """
+        vapour_enthalpy_j_kg = PropsSI("H", "T", T, "Q", 1.0, self.coolprop_key)
+
+        return vapour_enthalpy_j_kg

@@ -1,7 +1,7 @@
 
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Callable
 
 from fluid import Fluid
 
@@ -89,7 +89,6 @@ class TankConfig:
         """
 
 
-
         if initial_condition.pressure_pa is None or initial_condition.total_mass_kg is None:
             raise ValueError("pressure_mass requires pressure_pa and total_mass_kg")
 
@@ -141,6 +140,46 @@ class TankConfig:
         )
 
 
+    def _initialise_gas_tank_from_pressure_temperature(
+            self,
+            initial_condition: TankInitialCondition
+    ) -> TankState:
+        """
+        Initialise a gas tank from specified pressure and temperature, assuming ideal gas behaviour
+        """
+
+        if initial_condition.pressure_pa is None or initial_condition.temperature_k is None:
+            raise ValueError("pressure_temperature requires pressure_pa and temperature_k")
+        
+        # find the specific gas constant for the fluid
+        R = self.fluid.get_R()
+
+        # need to find mass from ideal gas law
+        total_mass_kg = initial_condition.pressure_pa * self.tank_volume_m3 / (R * initial_condition.temperature_k)
+
+        gamma = self.fluid.get_gamma_at_PT(initial_condition.pressure_pa, initial_condition.temperature_k)
+
+        # calculate the specific internal energy of the gas at the given temperature
+        cv = R / (gamma - 1.0)
+        specific_internal_energy_j_kg = cv * initial_condition.temperature_k
+
+        # calculate the total internal energy
+        total_internal_energy_j = specific_internal_energy_j_kg * total_mass_kg
+
+        return TankState(
+            config=self,
+            pressure_pa=initial_condition.pressure_pa,
+            temperature_k=initial_condition.temperature_k,
+            total_mass_kg=total_mass_kg,
+            total_internal_energy_j=total_internal_energy_j,
+            liquid_mass_kg=0.0,
+            vapour_mass_kg=0.0,
+            pressurant_gas_mass_kg=total_mass_kg,
+            ullage_volume_m3=self.tank_volume_m3,
+            liquid_volume_m3=0.0
+        )
+
+
 
 
     def initialise_tank_state(
@@ -151,14 +190,19 @@ class TankConfig:
         if self.phase_model == "self_pressurised" and initial_condition.mode == "pressure_mass":
             return self._initialise_self_pressurised_tank_from_pressure_mass(initial_condition)
 
+        elif self.phase_model == "gas" and initial_condition.mode == "pressure_temperature":
+            return self._initialise_gas_tank_from_pressure_temperature(initial_condition)
+
         raise NotImplementedError(f"Tank initialisation not implemented for phase_model={self.phase_model!r}, mode={initial_condition.mode!r}")
 
 
-    def state_from_mass_and_energy(
-        self,
-        total_mass_kg: float,
-        total_internal_energy_j: float,
-        previous_state: TankState | None = None
+
+
+    def _state_from_mass_and_energy_self_pressurised(
+            self,
+            total_mass_kg: float,
+            total_internal_energy_j: float,
+            previous_state: TankState | None = None
     ) -> TankState:
 
         if previous_state is not None and previous_state.temperature_k is not None:
@@ -173,7 +217,7 @@ class TankConfig:
         # now need to root search to find the temperature which gives the correct internal energy for the given mass, using a bisection method
 
         T_low_k = self.fluid.get_Ttriple()
-        T_high_k = self.fluid.get_Tcrit()
+        T_high_k = self.fluid.get_Tcrit() - 0.01
 
         energy_error_j = guessed_energy_j - total_internal_energy_j
         iteration = 0
@@ -242,6 +286,128 @@ class TankConfig:
             ullage_volume_m3=ullage_volume_m3,
             liquid_volume_m3=liquid_volume_m3
             )
+        
+
+
+    def _state_from_mass_and_energy_gas(
+            self,
+            total_mass_kg: float,
+            total_internal_energy_j: float,
+            previous_state: TankState | None = None
+    ) -> TankState:
+        
+        """
+        find the state of a tank containing single-phase gas from its total mass and internal energy.
+
+        Method:
+            1. find bulk gas density from known volume
+
+            2. compute target specific internal energy
+
+            3. solve for temperature that gives this specific internal energy at the computed density
+
+            4. get pressure from this density - temperature state
+        
+        """
+
+        # check if there is still mass left
+        if total_mass_kg <= 0.0:
+            raise ValueError(f"mass in {self.name} must remain positive")
+        
+
+        # find density
+        density_kg_m3 = total_mass_kg / self.tank_volume_m3
+
+        # convert total internal energy into specific internal energy
+        target_specific_internal_energy_j_kg = total_internal_energy_j / total_mass_kg
+
+        # use previous temperature as a starting point, as the current temp is probably pretty close
+        if previous_state is not None and previous_state.temperature_k is not None:
+            temperature_guess_k = previous_state.temperature_k
+        else:
+            temperature_guess_k = 300 # around ambient
+
+        def temperature_residual(temperature_k: float) -> float:
+            """
+            residual for the temperature root solve
+
+            at known density, find difference between 
+                - internal energy predicted by fluid model at temp
+                - target internal energy
+
+            correct temp is the root where this is zero
+            """
+
+            specific_internal_energy_j_kg = self.fluid.props_si("U", "D", density_kg_m3, "T", temperature_k)
+
+            residual = specific_internal_energy_j_kg - target_specific_internal_energy_j_kg
+
+            return residual
+        
+
+        # Root finding using bisection solve
+        # can only be between triple point and critical point, so we set these as the bounds
+
+        temp_low_k = self.fluid.get_Ttriple()
+        temp_high_k = self.fluid.get_Tcrit() - 0.01 # so solver can never return Tcrit
+
+        bounds = [temp_low_k, temp_high_k]
+
+        # assuming output temperature is correct
+        temperature_k = bisection_search(residual_func=temperature_residual, bounds=bounds)
+
+        # get pressure from solved density-temp state
+        pressure_pa = self.fluid.props_si("P", "D", density_kg_m3, "T", temperature_k)
+
+        
+        
+
+
+        return TankState(
+            config=self,
+            pressure_pa=pressure_pa,
+            temperature_k=temperature_k,
+            total_mass_kg=total_mass_kg,
+            total_internal_energy_j=total_internal_energy_j,
+            liquid_mass_kg=0.0,
+            vapour_mass_kg=total_mass_kg,
+            pressurant_gas_mass_kg=total_mass_kg if self.role == "pressurant" else None,
+            ullage_volume_m3=self.tank_volume_m3,
+            liquid_volume_m3=0.0
+        )
+
+
+
+
+    def state_from_mass_and_energy(
+        self,
+        total_mass_kg: float,
+        total_internal_energy_j: float,
+        previous_state: TankState | None = None,
+        phase_override: str | None = None
+    ) -> TankState:
+
+        # if a phase is specified then use it, otherwise use the tank default
+        active_model = phase_override if phase_override is not None else self.phase_model
+
+        if active_model == "self_pressurised":
+            return self._state_from_mass_and_energy_self_pressurised(
+                total_mass_kg=total_mass_kg,
+                total_internal_energy_j=total_internal_energy_j,
+                previous_state=previous_state
+            )
+
+        if active_model == "gas":
+            return self._state_from_mass_and_energy_gas(
+                total_mass_kg=total_mass_kg,
+                total_internal_energy_j=total_internal_energy_j,
+                previous_state=previous_state
+            )
+
+        raise NotImplementedError(f"Unsupported phase model: {active_model}")
+
+
+
 
 
 @dataclass
@@ -264,3 +430,42 @@ class TankState:
 
 
 
+def bisection_search(
+        residual_func: Callable, 
+        bounds: list, 
+        max_iterations: int = 100,
+        tolerance: float = 1e-3
+        ) -> float:
+
+    low = bounds[0]
+    high = bounds[1]
+
+    low_residual = residual_func(low)
+    high_residual = residual_func(high)
+
+    iteration = 0
+
+    while iteration < max_iterations:
+        
+        mid = 0.5 * (low + high)
+
+        mid_residual = residual_func(mid)
+        
+        # stop once residual is close enough to zero
+        if abs(mid_residual) < tolerance:
+            break
+
+        # keep the half-interval that still has the sign change
+        if low_residual * mid_residual <= 0.0:
+            high = mid
+            high_residual = mid_residual
+        else:
+            low = mid
+            low_residual = mid_residual
+        
+        iteration +=1
+
+        if iteration > 100:
+            raise RuntimeError(f"Root search failed to converge after 100 iterations. Final residual of {mid_residual}")
+
+    return 0.5 * (low + high)
