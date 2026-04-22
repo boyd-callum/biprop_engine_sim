@@ -43,13 +43,16 @@ def blowdown_advance_timestep(
     if tank_config.state.total_mass_kg is None or tank_config.state.total_internal_energy_j is None:
         raise ValueError("Tank state is missing total mass or total internal energy.")
 
-    downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+    
 
 
     # find current tank pressure and temperature
 
     tank_pressure_pa = tank_config.state.pressure_pa
     tank_temperature_k = tank_config.state.temperature_k
+
+    downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+    # downstream_pressure_pa = tank_pressure_pa * 0.36 # emulate chamber pressure of about 20 bar
 
     # find the saturation properties at the current tank temperature, to determine the density of the liquid phase in the tank
     saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(tank_temperature_k)

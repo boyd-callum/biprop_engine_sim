@@ -58,7 +58,7 @@ NITROGEN = Fluid(
 
 test_injector = InjectorConfig(
     cd=0.65,
-    area_m2=6.234e-5,
+    area_m2=6.234e-5, # 8 holes of area 3.15mm
     k=2 # approximation
 )
 
@@ -72,7 +72,7 @@ n2o_tank = TankConfig(
 
 n2o_tank_initial = TankInitialCondition(
     mode="pressure_mass",
-    pressure_pa=60e+5,    # 70 bar
+    pressure_pa=60e+5,    # 60 bar
     total_mass_kg=5.85
 )  
 
