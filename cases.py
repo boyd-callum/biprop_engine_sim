@@ -7,6 +7,7 @@ from fluid import Fluid
 from injector import InjectorConfig
 from engine import EngineConfig
 
+from constants import ATMOSPHERE_PRESSURE_PA
 
 #------------------------------
 # dataclasses
@@ -62,6 +63,12 @@ test_injector = InjectorConfig(
     k=2 # approximation
 )
 
+n2_test_injector = InjectorConfig(
+    cd=0.65,
+    area_m2=1e-5,
+    k=2 # approximation
+)
+
 n2o_tank = TankConfig(
     name="Nitrous Oxide Tank",
     role="oxidiser",
@@ -80,13 +87,13 @@ n2_tank = TankConfig(
     name="Nitrogen Tank",
     role="pressurant",
     fluid=NITROGEN,
-    tank_volume_m3=0.002,    # 2L
+    tank_volume_m3=0.001,    # 1L
     phase_model="gas"
 )
 
 n2_tank_initial = TankInitialCondition(
     mode="pressure_temperature",
-    pressure_pa=300e5,   # 300 bar
+    pressure_pa=3e+7,   # 300 bar
     temperature_k=293.15 # 20C
 )
 
@@ -108,7 +115,46 @@ n2_blowdown_case = SimCase(
     name="n2_blowdown_test",
     tank_configs={"n2_tank": n2_tank},
     tank_initial_conditions={"n2_tank": n2_tank_initial},
-    injector_configs={"test_injector":test_injector},
+    injector_configs={"test_injector":n2_test_injector},
     engine_config=None,
     settings=SimulationSettings(0.01, 20)
 )
+
+
+
+
+if __name__ == "__main__":
+
+    case = n2_blowdown_case
+
+    tank_config = case.tank_configs["n2_tank"]
+    injector_config = case.injector_configs["test_injector"]
+    inital_condition = case.tank_initial_conditions["n2_tank"]
+
+    # initialise tank state from the given initial condition
+    tank_config.state = tank_config.initialise_tank_state(inital_condition)
+
+
+    print(tank_config.state)
+
+    injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
+        tank_state=tank_config.state,
+        downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
+    )
+
+    print(injector_mdot_kg_s)
+
+    total_mass_kg = tank_config.state.total_mass_kg
+    total_internal_energy_j = tank_config.state.total_internal_energy_j
+
+    if total_internal_energy_j is None or total_mass_kg is None:
+        raise ValueError("mass or energy are None")
+
+    # use tank state solver instead of initialise solver
+    tank_config.state = tank_config.state_from_mass_and_energy(
+        total_mass_kg=total_mass_kg,
+        total_internal_energy_j=total_internal_energy_j,
+        phase_override="gas"
+    )
+
+    print(tank_config.state)

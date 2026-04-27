@@ -289,7 +289,7 @@ class TankConfig:
         
 
 
-    def _state_from_mass_and_energy_gas(
+    def _state_from_mass_and_energy_single_phase(
             self,
             total_mass_kg: float,
             total_internal_energy_j: float,
@@ -297,10 +297,13 @@ class TankConfig:
     ) -> TankState:
         
         """
-        find the state of a tank containing single-phase gas from its total mass and internal energy.
+        find the state of a tank containing single-phase real fluid from its total mass and internal energy. Can be used for:
+            - gas
+            - liquid
+            - supercritical fluid
 
         Method:
-            1. find bulk gas density from known volume
+            1. find bulk fluid density from known volume
 
             2. compute target specific internal energy
 
@@ -348,8 +351,8 @@ class TankConfig:
         # Root finding using bisection solve
         # can only be between triple point and critical point, so we set these as the bounds
 
-        temp_low_k = self.fluid.get_Ttriple()
-        temp_high_k = self.fluid.get_Tcrit() - 0.01 # so solver can never return Tcrit
+        temp_low_k = 10
+        temp_high_k = 1000
 
         bounds = [temp_low_k, temp_high_k]
 
@@ -398,7 +401,7 @@ class TankConfig:
             )
 
         if active_model == "gas":
-            return self._state_from_mass_and_energy_gas(
+            return self._state_from_mass_and_energy_single_phase(
                 total_mass_kg=total_mass_kg,
                 total_internal_energy_j=total_internal_energy_j,
                 previous_state=previous_state
