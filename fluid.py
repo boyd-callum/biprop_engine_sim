@@ -178,3 +178,11 @@ class Fluid:
         vapour_enthalpy_j_kg = PropsSI("H", "T", T, "Q", 1.0, self.coolprop_key)
 
         return vapour_enthalpy_j_kg
+    
+    def get_liquid_density_from_pressure_temperature(self, P: float, T: float) -> float:
+        """
+        returns density of a fluid from the temp, kg/m^3
+        """
+        density_kg_m3 = PropsSI("D", "T", T, "P", P, self.coolprop_key)
+
+        return density_kg_m3

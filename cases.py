@@ -97,6 +97,22 @@ n2_tank_initial = TankInitialCondition(
     temperature_k=293.15 # 20C
 )
 
+ethanol_tank_pressure_setpoint = 60*1e5 # 60 bar
+
+ethanol_tank = TankConfig(
+    name="Ethanol Tank",
+    role="fuel",
+    fluid=ETHANOL,
+    tank_volume_m3=0.005, # 5 L
+    phase_model="liquid"
+)
+
+ethanol_tank_initial = TankInitialCondition(
+    mode="temperature_mass",
+    total_mass_kg=3,
+    pressure_pa=ethanol_tank_pressure_setpoint
+)
+
 #------------------------------
 # Cases
 

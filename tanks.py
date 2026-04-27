@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Literal, Callable
+from constants import *
 
 from fluid import Fluid
 
@@ -13,7 +14,7 @@ PhaseModel = Literal["liquid", "gas", "self_pressurised", "unknown"]
 TankInitMode = Literal[
     "pressure_mass",         # good for self-pressurised N2O
     "pressure_temperature",  # good for simple gas tanks
-    "temperature_mass",
+    "temperature_mass",      # good for liquid tanks
 ]
 
 @dataclass
@@ -74,7 +75,8 @@ class TankConfig:
 
         return total_internal_energy_j
     
-
+# -----------------------------
+# Functions to initialise the state of the tanks before the first timestep
 
     def _initialise_self_pressurised_tank_from_pressure_mass(
             self, 
@@ -147,6 +149,7 @@ class TankConfig:
         """
         Initialise a gas tank from specified pressure and temperature, assuming ideal gas behaviour
         """
+        # TODO: Change this to use real gas model instead of ideal gas. this is likely the cause of the sudden drop in pressure at timestep 1
 
         if initial_condition.pressure_pa is None or initial_condition.temperature_k is None:
             raise ValueError("pressure_temperature requires pressure_pa and temperature_k")
@@ -180,6 +183,36 @@ class TankConfig:
         )
 
 
+    def _initialise_liquid_tank_from_temperature_mass(
+            self,
+            initial_condition: TankInitialCondition
+    ) -> TankState:
+        
+        """
+        initialise a liquid tank, assume pressure at atmospheric
+
+        pressure will then be supplied from a seperate tank
+        """
+
+
+        if initial_condition.temperature_k is None or initial_condition.total_mass_kg is None:
+            raise ValueError("temperature_mass requires temperature_k and total_mass_kg")
+
+        pressure_pa = ATMOSPHERE_PRESSURE_PA
+
+        # get liquid density based on the given temp and atmo pressure
+        density_kg_m3 = self.fluid.get_liquid_density_from_pressure_temperature(
+            P = pressure_pa,
+            T = initial_condition.temperature_k
+        )
+
+
+
+        return TankState(
+            config=self
+        )
+
+
 
 
     def initialise_tank_state(
@@ -193,9 +226,16 @@ class TankConfig:
         elif self.phase_model == "gas" and initial_condition.mode == "pressure_temperature":
             return self._initialise_gas_tank_from_pressure_temperature(initial_condition)
 
+        elif self.phase_model == "liquid" and initial_condition.mode == "pressure_mass":
+            return self._initialise_liquid_tank_from_temperature_mass(initial_condition)
+
         raise NotImplementedError(f"Tank initialisation not implemented for phase_model={self.phase_model!r}, mode={initial_condition.mode!r}")
 
 
+
+
+#------------------------------------
+# Functions to determine thet state of the tank during each timestep after fluid has left
 
 
     def _state_from_mass_and_energy_self_pressurised(
