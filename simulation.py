@@ -95,7 +95,7 @@ def gas_advance_timestep(
         total_mass_kg=new_total_mass_kg,
         total_internal_energy_j=new_total_energy_j,
         previous_state=tank_config.state,
-        phase_override="gas"
+        phase_override="single_phase"
     )
 
 
@@ -205,7 +205,7 @@ def blowdown_advance_timestep(
         total_mass_kg=new_total_mass_kg,
         total_internal_energy_j=new_total_internal_energy_j,
         previous_state=tank_config.state,
-        phase_override="self_pressurised" if liquid_remains_after_step else "gas"
+        phase_override="self_pressurised" if liquid_remains_after_step else "single_phase"
     )
 
     return new_tank_state, injector_mdot_kg_s
@@ -447,7 +447,7 @@ def single_tank_simulate(
                     injector_config=injector_config,
                     dt_s=dt_s
                 )
-            if tank_config.phase_model == "gas":
+            if tank_config.phase_model == "single_phase":
                 new_tank_state = gas_advance_timestep(
                     tank_config=tank_config,
                     injector_config=injector_config,

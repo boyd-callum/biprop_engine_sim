@@ -10,10 +10,10 @@ from fluid import Fluid
 # Dataclasses for the tanks
 
 SourceRole = Literal["fuel", "oxidiser", "pressurant"]
-PhaseModel = Literal["liquid", "gas", "self_pressurised", "unknown"]
+PhaseModel = Literal["liquid", "single_phase", "self_pressurised", "unknown"]
 TankInitMode = Literal[
     "pressure_mass",         # good for self-pressurised N2O
-    "pressure_temperature",  # good for simple gas tanks
+    "pressure_temperature",  # good for simple single-phase (gas) tanks
     "temperature_mass",      # good for liquid tanks
 ]
 
@@ -142,32 +142,36 @@ class TankConfig:
         )
 
 
-    def _initialise_gas_tank_from_pressure_temperature(
+    def _initialise_single_phase_tank_from_pressure_temperature(
             self,
             initial_condition: TankInitialCondition
     ) -> TankState:
         """
         Initialise a gas tank from specified pressure and temperature, assuming ideal gas behaviour
         """
-        # TODO: Change this to use real gas model instead of ideal gas. this is likely the cause of the sudden drop in pressure at timestep 1
 
+        
         if initial_condition.pressure_pa is None or initial_condition.temperature_k is None:
             raise ValueError("pressure_temperature requires pressure_pa and temperature_k")
-        
-        # find the specific gas constant for the fluid
-        R = self.fluid.get_R()
 
-        # need to find mass from ideal gas law
-        total_mass_kg = initial_condition.pressure_pa * self.tank_volume_m3 / (R * initial_condition.temperature_k)
+        pressure_pa = initial_condition.pressure_pa
+        temperature_k = initial_condition.temperature_k
 
-        gamma = self.fluid.get_gamma_at_PT(initial_condition.pressure_pa, initial_condition.temperature_k)
+        # Get the real fluid properties at current state
+        density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
+            P=pressure_pa,
+            T=temperature_k
+        )
+        specific_internal_energy_j_kg = self.fluid.get_specific_internal_energy_from_pressure_temperature(
+            P=pressure_pa,
+            T=temperature_k
+        )
 
-        # calculate the specific internal energy of the gas at the given temperature
-        cv = R / (gamma - 1.0)
-        specific_internal_energy_j_kg = cv * initial_condition.temperature_k
-
-        # calculate the total internal energy
+        # Convert intensive properties into extensive tank quantities.
+        total_mass_kg = density_kg_m3 * self.tank_volume_m3
         total_internal_energy_j = specific_internal_energy_j_kg * total_mass_kg
+
+        
 
         return TankState(
             config=self,
@@ -201,11 +205,12 @@ class TankConfig:
         pressure_pa = ATMOSPHERE_PRESSURE_PA
 
         # get liquid density based on the given temp and atmo pressure
-        density_kg_m3 = self.fluid.get_liquid_density_from_pressure_temperature(
+        density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
             P = pressure_pa,
             T = initial_condition.temperature_k
         )
 
+        
 
 
         return TankState(
@@ -223,10 +228,10 @@ class TankConfig:
         if self.phase_model == "self_pressurised" and initial_condition.mode == "pressure_mass":
             return self._initialise_self_pressurised_tank_from_pressure_mass(initial_condition)
 
-        elif self.phase_model == "gas" and initial_condition.mode == "pressure_temperature":
-            return self._initialise_gas_tank_from_pressure_temperature(initial_condition)
+        elif self.phase_model == "single_phase" and initial_condition.mode == "pressure_temperature":
+            return self._initialise_single_phase_tank_from_pressure_temperature(initial_condition)
 
-        elif self.phase_model == "liquid" and initial_condition.mode == "pressure_mass":
+        elif self.phase_model == "liquid" and initial_condition.mode == "temperature_mass":
             return self._initialise_liquid_tank_from_temperature_mass(initial_condition)
 
         raise NotImplementedError(f"Tank initialisation not implemented for phase_model={self.phase_model!r}, mode={initial_condition.mode!r}")
@@ -440,7 +445,7 @@ class TankConfig:
                 previous_state=previous_state
             )
 
-        if active_model == "gas":
+        if active_model == "single_phase":
             return self._state_from_mass_and_energy_single_phase(
                 total_mass_kg=total_mass_kg,
                 total_internal_energy_j=total_internal_energy_j,

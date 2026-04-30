@@ -88,7 +88,7 @@ n2_tank = TankConfig(
     role="pressurant",
     fluid=NITROGEN,
     tank_volume_m3=0.001,    # 1L
-    phase_model="gas"
+    phase_model="single_phase"
 )
 
 n2_tank_initial = TankInitialCondition(
@@ -110,7 +110,7 @@ ethanol_tank = TankConfig(
 ethanol_tank_initial = TankInitialCondition(
     mode="temperature_mass",
     total_mass_kg=3,
-    pressure_pa=ethanol_tank_pressure_setpoint
+    temperature_k=293.15 # 20c
 )
 
 #------------------------------
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     tank_config.state = tank_config.state_from_mass_and_energy(
         total_mass_kg=total_mass_kg,
         total_internal_energy_j=total_internal_energy_j,
-        phase_override="gas"
+        phase_override="single_phase"
     )
 
     print(tank_config.state)

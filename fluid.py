@@ -179,10 +179,19 @@ class Fluid:
 
         return vapour_enthalpy_j_kg
     
-    def get_liquid_density_from_pressure_temperature(self, P: float, T: float) -> float:
+    def get_fluid_density_from_pressure_temperature(self, P: float, T: float) -> float:
         """
-        returns density of a fluid from the temp, kg/m^3
+        returns density of a fluid from the pressure and temp, kg/m^3
         """
         density_kg_m3 = PropsSI("D", "T", T, "P", P, self.coolprop_key)
 
         return density_kg_m3
+    
+    def get_specific_internal_energy_from_pressure_temperature(self, P: float, T: float) -> float:
+        """"
+        returns the specific internal energy of a fluid from the pressure and temp, J/kg
+        """
+
+        specific_internal_energy_j_kg = PropsSI("U", "P", P, "T", T, self.coolprop_key)
+
+        return specific_internal_energy_j_kg
