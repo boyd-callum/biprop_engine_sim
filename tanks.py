@@ -147,7 +147,7 @@ class TankConfig:
             initial_condition: TankInitialCondition
     ) -> TankState:
         """
-        Initialise a gas tank from specified pressure and temperature, assuming ideal gas behaviour
+        Initialise a gas tank from specified pressure and temperature, using real gas behaviour
         """
 
         
@@ -203,18 +203,43 @@ class TankConfig:
             raise ValueError("temperature_mass requires temperature_k and total_mass_kg")
 
         pressure_pa = ATMOSPHERE_PRESSURE_PA
+        temperature_k = initial_condition.temperature_k
+
+        # determine volumes
 
         # get liquid density based on the given temp and atmo pressure
         density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
             P = pressure_pa,
             T = initial_condition.temperature_k
         )
-
         
+        total_mass_kg = initial_condition.total_mass_kg
+
+        liquid_volume_m3 = total_mass_kg * density_kg_m3
+
+        ullage_volume_m3 = self.tank_volume_m3 - liquid_volume_m3
+
+        # determine total internal energy
+        specific_internal_energy_j_kg = self.fluid.get_specific_internal_energy_from_pressure_temperature(
+            P = pressure_pa,
+            T = temperature_k
+        )
+
+        total_internal_energy_j = total_mass_kg*specific_internal_energy_j_kg
 
 
         return TankState(
-            config=self
+            config=self,
+            pressure_pa=pressure_pa,
+            temperature_k=temperature_k,
+            total_mass_kg=total_mass_kg,
+            total_internal_energy_j=total_internal_energy_j,
+            liquid_mass_kg=total_mass_kg,
+            vapour_mass_kg=0,
+            pressurant_gas_mass_kg=0,
+            ullage_volume_m3=ullage_volume_m3,
+            liquid_volume_m3=liquid_volume_m3,
+            pressurant_gas_internal_energy_j=0
         )
 
 
@@ -455,7 +480,7 @@ class TankConfig:
         raise NotImplementedError(f"Unsupported phase model: {active_model}")
 
 
-
+    
 
 
 @dataclass
@@ -474,6 +499,8 @@ class TankState:
 
     ullage_volume_m3: float | None = None
     liquid_volume_m3: float | None = None
+
+    pressurant_gas_internal_energy_j: float | None = None
 
 
 
