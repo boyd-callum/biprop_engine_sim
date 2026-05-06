@@ -6,6 +6,7 @@ from tanks import TankConfig, TankInitialCondition
 from fluid import Fluid
 from injector import InjectorConfig
 from engine import EngineConfig
+from regulator import RegulatorConfig
 
 from constants import ATMOSPHERE_PRESSURE_PA
 
@@ -97,20 +98,26 @@ n2_tank_initial = TankInitialCondition(
     temperature_k=293.15 # 20C
 )
 
-ethanol_tank_pressure_setpoint = 60*1e5 # 60 bar
 
 ethanol_tank = TankConfig(
     name="Ethanol Tank",
     role="fuel",
     fluid=ETHANOL,
     tank_volume_m3=0.005, # 5 L
-    phase_model="liquid"
+    phase_model="pressurised_liquid",
+    pressurant_fluid=NITROGEN
 )
 
 ethanol_tank_initial = TankInitialCondition(
-    mode="temperature_mass",
-    total_mass_kg=3,
-    temperature_k=293.15 # 20c
+    mode="pressure_temperature_mass",
+    total_mass_kg=3, # actually liquid mass
+    temperature_k=293.15, # 20c
+    pressure_pa=60*1e5 # 60 bar
+)
+
+ethanol_regulator = RegulatorConfig(
+    name="Ethanol Reg",
+    set_pressure_pa=60*1e5 # 60 bar
 )
 
 #------------------------------

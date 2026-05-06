@@ -10,11 +10,11 @@ from fluid import Fluid
 # Dataclasses for the tanks
 
 SourceRole = Literal["fuel", "oxidiser", "pressurant"]
-PhaseModel = Literal["liquid", "single_phase", "self_pressurised", "unknown"]
+PhaseModel = Literal["pressurised_liquid", "single_phase", "self_pressurised", "unknown"]
 TankInitMode = Literal[
     "pressure_mass",         # good for self-pressurised N2O
     "pressure_temperature",  # good for simple single-phase (gas) tanks
-    "temperature_mass",      # good for liquid tanks
+    "pressure_temperature_mass",      # good for pressurised liquid tanks
 ]
 
 @dataclass
@@ -33,9 +33,9 @@ class TankInitialCondition:
             if self.pressure_pa is None or self.temperature_k is None:
                 raise ValueError("pressure_temperature requires pressure_pa and temperature_k")
 
-        elif self.mode == "temperature_mass":
-            if self.temperature_k is None or self.total_mass_kg is None:
-                raise ValueError("temperature_mass requires temperature_k and total_mass_kg")
+        elif self.mode == "pressure_temperature_mass":
+            if self.pressure_pa is None or self.temperature_k is None or self.total_mass_kg is None:
+                raise ValueError("pressure_temperature_mass requires pressure_pa, temperature_k, and total_mass_kg")
 
 @dataclass
 class TankConfig:
@@ -45,6 +45,7 @@ class TankConfig:
     tank_volume_m3: float
     phase_model: PhaseModel = 'unknown'
     state: TankState | None = None
+    pressurant_fluid: Fluid | None = None
 
 
     def calculate_internal_energy(
@@ -187,45 +188,79 @@ class TankConfig:
         )
 
 
-    def _initialise_liquid_tank_from_temperature_mass(
+    def _initialise_liquid_tank_from_pressure_temperature_mass(
             self,
             initial_condition: TankInitialCondition
     ) -> TankState:
         
         """
-        initialise a liquid tank, assume pressure at atmospheric
+        initialise a gas-pressurised liquid tank from:
+            - tnak pressure
+            - tank temperature
+            - liquid mass
 
-        pressure will then be supplied from a seperate tank
+        assumptions:
+            - liquid and ullage gas are initially in thermal equilibirium
+            - ullage gas fills all volume not occupied by liquid
+            - pressurant gas is single-phase (using real-fluid properties)
         """
 
 
-        if initial_condition.temperature_k is None or initial_condition.total_mass_kg is None:
-            raise ValueError("temperature_mass requires temperature_k and total_mass_kg")
+        if initial_condition.pressure_pa is None:
+            raise ValueError("Initial condition is missing pressure_pa.")
+        if initial_condition.temperature_k is None:
+            raise ValueError("Initial condition is missing temperature_k.")
+        if initial_condition.total_mass_kg is None:
+            raise ValueError("Initial condition is missing mass_kg for liquid mass.")
 
-        pressure_pa = ATMOSPHERE_PRESSURE_PA
+        pressure_pa = initial_condition.pressure_pa
         temperature_k = initial_condition.temperature_k
+        liquid_mass_kg = initial_condition.total_mass_kg
 
-        # determine volumes
-
-        # get liquid density based on the given temp and atmo pressure
-        density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
-            P = pressure_pa,
-            T = initial_condition.temperature_k
+        # find liquid density at inital state
+        liquid_density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
+            P=pressure_pa,
+            T=temperature_k
         )
-        
-        total_mass_kg = initial_condition.total_mass_kg
 
-        liquid_volume_m3 = total_mass_kg * density_kg_m3
-
+        liquid_volume_m3 = liquid_mass_kg / liquid_density_kg_m3
         ullage_volume_m3 = self.tank_volume_m3 - liquid_volume_m3
 
-        # determine total internal energy
-        specific_internal_energy_j_kg = self.fluid.get_specific_internal_energy_from_pressure_temperature(
-            P = pressure_pa,
-            T = temperature_k
+        # check to make sure no error in volumes
+
+        if ullage_volume_m3 < 0.0:
+            raise ValueError(
+                f"Liquid volume exceeds tank volume in {self.name}. "
+                f"Liquid volume = {liquid_volume_m3:.6e} m^3, "
+                f"tank volume = {self.tank_volume_m3:.6e} m^3"
+            )
+        
+        if self.pressurant_fluid is None:
+            raise ValueError(f"Gas-pressurised liquid tank ({self.name}) requires a pressurant fluid.")
+
+
+        # pressurant gas density and mass in the ullage
+        pressurant_density_kg_m3 = self.pressurant_fluid.get_fluid_density_from_pressure_temperature(
+            P=pressure_pa,
+            T=temperature_k
         )
 
-        total_internal_energy_j = total_mass_kg*specific_internal_energy_j_kg
+        pressurant_mass_kg = pressurant_density_kg_m3 * ullage_volume_m3
+
+        # specific internal energies
+        liquid_u_j_kg = self.fluid.get_specific_internal_energy_from_pressure_temperature(
+            T= temperature_k,
+            P=pressure_pa
+        )
+        pressurant_u_j_kg = self.pressurant_fluid.get_specific_internal_energy_from_pressure_temperature(
+            T=temperature_k,
+            P=pressure_pa
+        )
+
+
+        # find total mass and internal energy
+        total_mass_kg = liquid_mass_kg + pressurant_mass_kg
+        total_internal_energy_j = liquid_mass_kg*liquid_u_j_kg + pressurant_mass_kg*pressurant_u_j_kg
 
 
         return TankState(
@@ -234,12 +269,12 @@ class TankConfig:
             temperature_k=temperature_k,
             total_mass_kg=total_mass_kg,
             total_internal_energy_j=total_internal_energy_j,
-            liquid_mass_kg=total_mass_kg,
+            liquid_mass_kg=liquid_mass_kg,
             vapour_mass_kg=0,
-            pressurant_gas_mass_kg=0,
+            pressurant_gas_mass_kg=pressurant_mass_kg,
             ullage_volume_m3=ullage_volume_m3,
             liquid_volume_m3=liquid_volume_m3,
-            pressurant_gas_internal_energy_j=0
+            pressurant_gas_internal_energy_j=pressurant_mass_kg*pressurant_u_j_kg
         )
 
 
@@ -256,8 +291,8 @@ class TankConfig:
         elif self.phase_model == "single_phase" and initial_condition.mode == "pressure_temperature":
             return self._initialise_single_phase_tank_from_pressure_temperature(initial_condition)
 
-        elif self.phase_model == "liquid" and initial_condition.mode == "temperature_mass":
-            return self._initialise_liquid_tank_from_temperature_mass(initial_condition)
+        elif self.phase_model == "pressurised_liquid" and initial_condition.mode == "pressure_temperature_mass":
+            return self._initialise_liquid_tank_from_pressure_temperature_mass(initial_condition)
 
         raise NotImplementedError(f"Tank initialisation not implemented for phase_model={self.phase_model!r}, mode={initial_condition.mode!r}")
 
@@ -517,6 +552,12 @@ def bisection_search(
 
     low_residual = residual_func(low)
     high_residual = residual_func(high)
+
+    if low_residual * high_residual > 0.0:
+        raise ValueError(
+            f"Bisection bounds do not bracket a root: "
+            f"f({low})={low_residual}, f({high})={high_residual}"
+        )
 
     iteration = 0
 
