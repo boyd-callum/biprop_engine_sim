@@ -195,3 +195,19 @@ class Fluid:
         specific_internal_energy_j_kg = PropsSI("U", "P", P, "T", T, self.coolprop_key)
 
         return specific_internal_energy_j_kg
+    
+    def get_fluid_enthalpy_from_pressure_temperature(self, P: float, T: float) -> float:
+        """
+        returns the specific enthalpy of a fluid from the pressure and temp, J/kg
+        """
+        enthalpy_j_kg = PropsSI("H", "P", P, "T", T, self.coolprop_key)
+
+        return enthalpy_j_kg
+    
+    def get_fluid_enthalpy_from_density_temperature(self, D: float, T: float) -> float:
+        """
+        returns the specific enthalpy of a fluid from the density and temp, J/kg
+        """
+        enthalpy_j_kg = PropsSI("H", "D", D, "T", T, self.coolprop_key)
+
+        return enthalpy_j_kg

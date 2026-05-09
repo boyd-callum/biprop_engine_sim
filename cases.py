@@ -29,6 +29,8 @@ class SimCase:
 
     injector_configs: dict[str, InjectorConfig]
 
+    regulator_configs: dict[str, RegulatorConfig] | None = None
+
     engine_config: EngineConfig | None = None
 
     # sim settings
@@ -85,7 +87,7 @@ n2o_tank_initial = TankInitialCondition(
 )  
 
 n2_tank = TankConfig(
-    name="Nitrogen Tank",
+    name="n2_tank",
     role="pressurant",
     fluid=NITROGEN,
     tank_volume_m3=0.001,    # 1L
@@ -100,7 +102,7 @@ n2_tank_initial = TankInitialCondition(
 
 
 ethanol_tank = TankConfig(
-    name="Ethanol Tank",
+    name="ethanol_tank",
     role="fuel",
     fluid=ETHANOL,
     tank_volume_m3=0.005, # 5 L
@@ -116,7 +118,7 @@ ethanol_tank_initial = TankInitialCondition(
 )
 
 ethanol_regulator = RegulatorConfig(
-    name="Ethanol Reg",
+    name="ethanol_regulator",
     set_pressure_pa=60*1e5 # 60 bar
 )
 
@@ -143,6 +145,21 @@ n2_blowdown_case = SimCase(
     settings=SimulationSettings(0.01, 20)
 )
 
+ethanol_case = SimCase(
+    name="ethanol_test",
+    tank_configs={
+            "ethanol_tank": ethanol_tank,
+            "n2_tank": n2_tank
+        },
+    tank_initial_conditions={
+            "ethanol_tank": ethanol_tank_initial,
+            "n2_tank": n2_tank_initial
+        },
+    injector_configs={"test_injector":test_injector},
+    regulator_configs={"ethanol_regulator": ethanol_regulator},
+    engine_config=None,
+    settings=SimulationSettings(0.01, 20)
+)
 
 
 
