@@ -1,13 +1,20 @@
-
+from typing import Literal
 from dataclasses import dataclass
 from fluid import Fluid
-from tanks import TankState
+from tanks import TankState, TankConfig
+
+
+
+PropellantRole = Literal["fuel", "oxidiser"]
+
 
 
 @dataclass
 class RegulatorConfig:
     name: str
     set_pressure_pa: float
+    role: PropellantRole
+
 
     def get_regulator_mdot_kg_s(
             self,

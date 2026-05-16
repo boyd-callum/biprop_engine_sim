@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from tanks import TankConfig, TankInitialCondition
 from fluid import Fluid
 from injector import InjectorConfig
-from engine import EngineConfig
+from engine import EngineConfig, EngineGeometry
 from regulator import RegulatorConfig
 
-from constants import ATMOSPHERE_PRESSURE_PA
+from constants import ATMOSPHERE_PRESSURE_PA, PI
 
 #------------------------------
 # dataclasses
@@ -17,6 +17,7 @@ from constants import ATMOSPHERE_PRESSURE_PA
 class SimulationSettings:
     dt_s: float = 0.01
     t_final_s: float = 10.0
+    print_steps: int = 10
 
 
 @dataclass
@@ -59,6 +60,11 @@ NITROGEN = Fluid(
     backend="HEOS",
     cea_name=None,   # not used in combustion
 )
+
+
+# ----------------------
+# Defining configs
+
 
 test_injector = InjectorConfig(
     cd=0.65,
@@ -114,12 +120,40 @@ ethanol_tank_initial = TankInitialCondition(
     mode="pressure_temperature_mass",
     total_mass_kg=3, # actually liquid mass
     temperature_k=293.15, # 20c
-    pressure_pa=60*1e5 # 60 bar
+    pressure_pa=50*1e5 # 60 bar
 )
 
 ethanol_regulator = RegulatorConfig(
     name="ethanol_regulator",
-    set_pressure_pa=60*1e5 # 60 bar
+    set_pressure_pa=50*1e5, # 60 bar
+    role="fuel"
+)
+
+
+throat_dia_mm = 25
+throat_area_mm2 = PI * (throat_dia_mm/2)**2
+throat_area_m2 = throat_area_mm2 * 1e-6
+
+engine_geometry = EngineGeometry(
+    nozzle_throat_area_m2 = throat_area_m2,
+    expansion_ratio = 5
+)
+
+engine = EngineConfig(
+    geometry = engine_geometry
+)
+
+
+n2o_injector = InjectorConfig(
+    cd=0.65,
+    area_m2=3.0e-5,
+    role="oxidiser",
+)
+
+ethanol_injector = InjectorConfig(
+    cd=0.65,
+    area_m2=9.0e-6,
+    role="fuel",
 )
 
 #------------------------------
@@ -163,38 +197,33 @@ ethanol_case = SimCase(
 
 
 
-if __name__ == "__main__":
 
-    case = n2_blowdown_case
+full_biprop_case = SimCase(
+    name = "Full Biprop Case",
 
-    tank_config = case.tank_configs["n2_tank"]
-    injector_config = case.injector_configs["test_injector"]
-    inital_condition = case.tank_initial_conditions["n2_tank"]
+    tank_configs = {
+        "n2o_tank" : n2o_tank,
+        "ethanol_tank" : ethanol_tank,
+        "n2_tank" : n2_tank
+        },
 
-    # initialise tank state from the given initial condition
-    tank_config.state = tank_config.initialise_tank_state(inital_condition)
+    tank_initial_conditions={
+        "n2o_tank" : n2o_tank_initial,
+        "ethanol_tank": ethanol_tank_initial,
+        "n2_tank": n2_tank_initial
+        },
 
+    injector_configs={
+        "n2o_injector" : n2o_injector,
+        "ethanol_injector" : ethanol_injector
+        },
 
-    print(tank_config.state)
+    regulator_configs={
+        "ethanol_regulator" : ethanol_regulator
+        },
+    
+    engine_config=engine,
 
-    injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
-        tank_state=tank_config.state,
-        downstream_pressure_pa=ATMOSPHERE_PRESSURE_PA
-    )
+    settings=SimulationSettings(dt_s=0.02, print_steps=10)
 
-    print(injector_mdot_kg_s)
-
-    total_mass_kg = tank_config.state.total_mass_kg
-    total_internal_energy_j = tank_config.state.total_internal_energy_j
-
-    if total_internal_energy_j is None or total_mass_kg is None:
-        raise ValueError("mass or energy are None")
-
-    # use tank state solver instead of initialise solver
-    tank_config.state = tank_config.state_from_mass_and_energy(
-        total_mass_kg=total_mass_kg,
-        total_internal_energy_j=total_internal_energy_j,
-        phase_override="single_phase"
-    )
-
-    print(tank_config.state)
+)

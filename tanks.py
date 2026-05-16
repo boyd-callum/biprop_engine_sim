@@ -549,7 +549,8 @@ class TankConfig:
 
             pressure_pa = bisection_search(
                 residual_func=pressure_residual,
-                bounds = [1e4, 1e8]
+                bounds = [1e4, 1e8],
+                tolerance=1e-9
             )
         
             return pressure_pa
@@ -587,7 +588,8 @@ class TankConfig:
 
         temperature_k = bisection_search(
             residual_func=temperature_residual,
-            bounds=[temp_low_k, temp_high_k]
+            bounds=[temp_low_k, temp_high_k],
+            tolerance=1e-2
         )
 
         pressure_pa = solve_pressure_for_temperature(temperature_k)

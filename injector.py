@@ -9,12 +9,14 @@ import math
 # -------------------------------
 # Dataclasses for the injectors
 
+InjectorRole = Literal["fuel", "oxidiser", "generic"]
 
 @dataclass
 class InjectorConfig:
     cd: float
     area_m2: float
-    k: float
+    k: float = 2.0
+    role: InjectorRole = "generic"
 
     # flow modeling using dyer method (formally known as the NHNE model)
     # https://wikis.mit.edu/confluence/display/RocketTeam/Modeling
@@ -44,6 +46,8 @@ class InjectorConfig:
         density_kg_m3 = 1.0 / saturation_properties['vf']
 
         delta_p_pa = upstream_pressure_pa - downstream_pressure_pa
+        if delta_p_pa <= 0.0:
+            return 0.0
 
         mdot_kg_s = self.cd * self.area_m2 * math.sqrt(2 * density_kg_m3 * delta_p_pa)
 
@@ -149,14 +153,18 @@ class InjectorConfig:
         if upstream_pressure_pa is None or upstream_temperature_k is None:
             raise ValueError("Tank state is missing pressure or temperature.")
 
-        liquid_density_kg_m3 = tank_state.config.fluid.get_saturation_properties_from_temp(upstream_temperature_k)['vf']**-1
+        liquid_density_kg_m3 = tank_state.config.fluid.get_fluid_density_from_pressure_temperature(
+            P=upstream_pressure_pa,
+            T=upstream_temperature_k
+        )
 
         # calculate mass flow rate using incompressible orifice flow equation
 
         delta_p_pa = upstream_pressure_pa - downstream_pressure_pa
 
         if delta_p_pa <= 0.0:
-            raise ValueError(f"Reversed flow in injector. Delta p of {delta_p_pa} Pa")
+            # raise ValueError(f"Reversed flow in injector. Delta p of {delta_p_pa} Pa")
+            return 0.0
         
         mdot_kg_s = self.cd * self.area_m2 * math.sqrt(2.0 * liquid_density_kg_m3 * delta_p_pa)
 
@@ -188,6 +196,9 @@ class InjectorConfig:
 
         upstream_pressure_pa = tank_state.pressure_pa
         upstream_temperature_k = tank_state.temperature_k
+
+        if upstream_pressure_pa - downstream_pressure_pa <= 0.0:
+            return 0.0
 
         gamma = tank_state.config.fluid.get_gamma_at_PT(upstream_pressure_pa, upstream_temperature_k)
 
