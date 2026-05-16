@@ -76,106 +76,191 @@ def blowdown_advance_timestep(
     injector_config: InjectorConfig,
     dt_s: float,
     downstream_pressure_pa: float = ATMOSPHERE_PRESSURE_PA
-    ) -> tuple[TankState, float]:
+) -> tuple[TankState, float]:
 
-    if tank_config.state is None:
+    current_state = tank_config.state
+
+    if current_state is None:
         raise ValueError("Tank state is not initialised.")
-    if tank_config.state.pressure_pa is None or tank_config.state.temperature_k is None:
+    if current_state.pressure_pa is None or current_state.temperature_k is None:
         raise ValueError("Tank state is missing pressure or temperature.")
-    if tank_config.state.total_mass_kg is None or tank_config.state.total_internal_energy_j is None:
+    if current_state.total_mass_kg is None or current_state.total_internal_energy_j is None:
         raise ValueError("Tank state is missing total mass or total internal energy.")
-
-    
-
-
-    # find current tank pressure and temperature
-
-    tank_pressure_pa = tank_config.state.pressure_pa
-    tank_temperature_k = tank_config.state.temperature_k
-
-
-    # find the saturation properties at the current tank temperature, to determine the density of the liquid phase in the tank
-    saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(tank_temperature_k)
-    
-
-    if tank_config.state.liquid_mass_kg is None:
+    if current_state.liquid_mass_kg is None:
         raise ValueError("Tank state is missing liquid mass.")
+
     
-    liquid_mass_kg = tank_config.state.liquid_mass_kg
+
+    tank_temperature_k = current_state.temperature_k
+    liquid_mass_kg = current_state.liquid_mass_kg
+
+    def advance_gas_from_state(
+        start_state: TankState,
+        gas_dt_s: float
+    ) -> tuple[TankState, float, float, float]:
+        """
+        Advances a gas-only state by gas_dt_s.
+
+        Returns:
+            new_state, gas_mdot_kg_s, gas_mass_out_kg, gas_energy_out_j
+        """
+
+        if gas_dt_s <= 0.0:
+            return start_state, 0.0, 0.0, 0.0
+
+        if start_state.total_mass_kg is None:
+            raise ValueError("Gas state is missing total mass.")
+        if start_state.total_internal_energy_j is None:
+            raise ValueError("Gas state is missing total internal energy.")
+        if start_state.temperature_k is None:
+            raise ValueError("Gas state is missing temperature.")
+        
 
 
-    # if any liquid remains at start of time step, estimate mdot via the dyer model
+        if start_state.total_mass_kg <= 0.0:
+            return start_state, 0.0, 0.0, 0.0
 
-    if liquid_mass_kg > DRYOUT_TOLERANCE_KG:
-
-        # find the saturation properties at the current tank temperature, to determine the density of the liquid phase in the tank
-        saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(tank_temperature_k)
-
-        prelim_mdot_kg_s = injector_config.get_dyer_mdot_kg_s(
-            tank_state=tank_config.state,
+        gas_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
+            tank_state=start_state,
             downstream_pressure_pa=downstream_pressure_pa
         )
 
-        if liquid_mass_kg > prelim_mdot_kg_s * dt_s:
-            # entire timestep is liquid discharge through injector
-            injector_mdot_kg_s = prelim_mdot_kg_s
-            mass_out_kg = injector_mdot_kg_s*dt_s
-            energy_out_j = mass_out_kg * saturation_properties["hf"]
+        gas_mass_out_kg = gas_mdot_kg_s * gas_dt_s
 
-        else:
-            # dryout occurs in this timestep
-            # flow out is still vapour, but the tank state at the start of the timestep is still saturated, so using saturated vapour enthalpy here
+        # Clamp so we never remove more mass than exists.
+        if gas_mass_out_kg > start_state.total_mass_kg:
+            gas_mass_out_kg = start_state.total_mass_kg
+            gas_mdot_kg_s = gas_mass_out_kg / gas_dt_s
 
-            injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
-                tank_state=tank_config.state,
-                downstream_pressure_pa=downstream_pressure_pa
-            )
-            mass_out_kg = injector_mdot_kg_s*dt_s
-            energy_out_j = mass_out_kg*saturation_properties["hg"]
+        gas_density_kg_m3 = start_state.total_mass_kg / tank_config.tank_volume_m3
 
-    
-    else:
-        # tank was already gas-only at the start of the timestep
-
-        injector_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
-            tank_state=tank_config.state,
-            downstream_pressure_pa=downstream_pressure_pa
-        )
-        mass_out_kg = injector_mdot_kg_s*dt_s
-
-        # for a real gas-only state we aren't saturated, so need to use actual gas enthalpy
-        gas_density_kg_m3 = tank_config.state.total_mass_kg / tank_config.tank_volume_m3
         gas_enthalpy_j_kg = tank_config.fluid.props_si(
-            "H", "D", gas_density_kg_m3, "T", tank_temperature_k
+            "H",
+            "D",
+            gas_density_kg_m3,
+            "T",
+            start_state.temperature_k
         )
 
-        energy_out_j = mass_out_kg * gas_enthalpy_j_kg
-   
+        gas_energy_out_j = gas_mass_out_kg * gas_enthalpy_j_kg
 
-    # find new total mass and internal energy in the tank
-    new_total_mass_kg = tank_config.state.total_mass_kg - mass_out_kg
-    new_total_internal_energy_j = tank_config.state.total_internal_energy_j - energy_out_j
+        new_total_mass_kg = start_state.total_mass_kg - gas_mass_out_kg
+        new_total_internal_energy_j = (
+            start_state.total_internal_energy_j
+            - gas_energy_out_j
+        )
 
+        new_state = tank_config.state_from_mass_and_energy(
+            total_mass_kg=new_total_mass_kg,
+            total_internal_energy_j=new_total_internal_energy_j,
+            previous_state=start_state,
+            phase_override="single_phase"
+        )
 
-    # decide which tank-state solver to use for the new state
-    # if liquid still remains, stay on self-pressurised 2phase solver, otherwise switch to gas
-    liquid_remains_after_step = (
-        tank_config.phase_model == "self_pressurised"
-        and tank_config.state.liquid_mass_kg is not None
-        and tank_config.state.liquid_mass_kg > mass_out_kg + DRYOUT_TOLERANCE_KG
+        return new_state, gas_mdot_kg_s, gas_mass_out_kg, gas_energy_out_j
+
+    # ------------------------------------------------------------------
+    # Case 1: tank is already gas-only at the start of the timestep
+
+    if liquid_mass_kg <= DRYOUT_TOLERANCE_KG:
+
+        new_tank_state, gas_mdot_kg_s, _, _ = advance_gas_from_state(
+            start_state=current_state,
+            gas_dt_s=dt_s
+        )
+
+        return new_tank_state, gas_mdot_kg_s
+
+    # ------------------------------------------------------------------
+    # Case 2: liquid exists at the start of the timestep
+
+    saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(
+        tank_temperature_k
     )
 
-    
-
-    # update tank state based on the new mass and energy
-    new_tank_state = tank_config.state_from_mass_and_energy(
-        total_mass_kg=new_total_mass_kg,
-        total_internal_energy_j=new_total_internal_energy_j,
-        previous_state=tank_config.state,
-        phase_override="self_pressurised" if liquid_remains_after_step else "single_phase"
+    liquid_mdot_kg_s = injector_config.get_dyer_mdot_kg_s(
+        tank_state=current_state,
+        downstream_pressure_pa=downstream_pressure_pa
     )
 
-    return new_tank_state, injector_mdot_kg_s
+    if liquid_mdot_kg_s <= 0.0:
+        return current_state, 0.0
+
+    full_step_liquid_mass_out_kg = liquid_mdot_kg_s * dt_s
+
+    # ------------------------------------------------------------------
+    # Case 2a: liquid remains for the whole timestep
+
+    if liquid_mass_kg > full_step_liquid_mass_out_kg + DRYOUT_TOLERANCE_KG:
+
+        mass_out_kg = full_step_liquid_mass_out_kg
+        energy_out_j = mass_out_kg * saturation_properties["hf"]
+
+        new_total_mass_kg = current_state.total_mass_kg - mass_out_kg
+        new_total_internal_energy_j = (
+            current_state.total_internal_energy_j
+            - energy_out_j
+        )
+
+        new_tank_state = tank_config.state_from_mass_and_energy(
+            total_mass_kg=new_total_mass_kg,
+            total_internal_energy_j=new_total_internal_energy_j,
+            previous_state=current_state,
+            phase_override="self_pressurised"
+        )
+
+        return new_tank_state, liquid_mdot_kg_s
+
+    # ------------------------------------------------------------------
+    # Case 2b: dryout occurs inside this timestep
+
+    liquid_time_s = liquid_mass_kg / liquid_mdot_kg_s
+    liquid_time_s = max(0.0, min(liquid_time_s, dt_s))
+
+    gas_time_s = dt_s - liquid_time_s
+
+    # First remove exactly the remaining liquid.
+    liquid_mass_out_kg = liquid_mass_kg
+    liquid_energy_out_j = liquid_mass_out_kg * saturation_properties["hf"]
+
+    dryout_total_mass_kg = current_state.total_mass_kg - liquid_mass_out_kg
+    dryout_total_internal_energy_j = (
+        current_state.total_internal_energy_j
+        - liquid_energy_out_j
+    )
+
+    # Reconstruct the intermediate dryout state as gas-only.
+    dryout_state = tank_config.state_from_mass_and_energy(
+        total_mass_kg=dryout_total_mass_kg,
+        total_internal_energy_j=dryout_total_internal_energy_j,
+        previous_state=current_state,
+        phase_override="single_phase"
+    )
+
+    # Since this is explicitly the dryout point, do not allow a tiny
+    # reconstructed liquid mass to carry through this timestep.
+    dryout_state.liquid_mass_kg = 0.0
+
+    # Then use gas discharge for the remaining part of the timestep.
+    (
+        final_state,
+        gas_mdot_kg_s,
+        gas_mass_out_kg,
+        gas_energy_out_j
+    ) = advance_gas_from_state(
+        start_state=dryout_state,
+        gas_dt_s=gas_time_s
+    )
+
+    final_state.liquid_mass_kg = 0.0
+
+    total_mass_out_kg = liquid_mass_out_kg + gas_mass_out_kg
+
+    # Return timestep-averaged injector mdot so the rest of the sim does not
+    # need to know that this timestep was internally split.
+    average_injector_mdot_kg_s = total_mass_out_kg / dt_s
+
+    return final_state, average_injector_mdot_kg_s
     
 
 
