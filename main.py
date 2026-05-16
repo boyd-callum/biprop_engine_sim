@@ -22,12 +22,12 @@ if __name__ == "__main__":
     
     plot_sim_record(
         simRecord=sim_record,
-        file_path=f"{case.name}_test_results.png",
+        file_path=f"plots/{case.name}_test_results.png",
         cols=7,
         show=True
     )
 
     log_results(
-        file_path=f"{case.name}_results.csv",
+        file_path=f"logs/{case.name}_results.csv",
         sim_record=sim_record
     )
