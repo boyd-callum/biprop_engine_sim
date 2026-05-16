@@ -641,16 +641,14 @@ def biprop_simulate(
         if fuel_tank_state.pressure_pa < min_pressure:
             print(f"Fuel tank pressure dropped below {format_bar(min_pressure)} bar, sim ended at {time_s} seconds.")
             break
+            
+        if engine.state.thrust_n == 0.0:
+            print(f"Engine stopped producing thrust, sim ended at {time_s} seconds.")
+            break
         
         step_index += 1
         
         
-
-
-
-
-
-
 
     if record:
         return SimRecord(
