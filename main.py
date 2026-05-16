@@ -1,5 +1,5 @@
 from simulation import biprop_simulate
-from cases import full_biprop_case
+from cases import full_biprop_case, big_boy_case
 
 from outputs import plot_sim_record, log_results
 
@@ -11,7 +11,7 @@ if __name__ == "__main__":
     """
     run case and plot results
     """
-    case = full_biprop_case
+    case = big_boy_case
 
     sim_record = biprop_simulate(case, record=True)
 
