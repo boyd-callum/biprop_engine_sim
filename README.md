@@ -219,7 +219,7 @@ This is still a development model. Some known limitations:
 - Nitrous oxide dryout can cause numerical issues if the model switches sharply between liquid/two-phase and gas-only injector flow.
 - The regulator model is simplified and does not yet fully enforce realistic upstream/downstream pressure limits.
 - The pressurised liquid tank model is sensitive to state solver tolerances.
-- Combustion is quasi-steady - chamber filling, ignition transient, combustion instability, and finite-rate chemistry are not modelled.
+- Combustion is quasi-steady - chamber filling, ignition transients, combustion instability, and real combustion speeds are not modelled.
 - Heat transfer to the chamber wall, tank walls, and feed lines is not currently included.
 
 
