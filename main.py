@@ -11,7 +11,7 @@ if __name__ == "__main__":
     """
     run case and plot results
     """
-    case = big_boy_case
+    case = full_biprop_case
 
     sim_record = biprop_simulate(case, record=True)
 
