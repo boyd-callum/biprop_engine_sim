@@ -7,6 +7,7 @@ from fluid import Fluid
 from injector import InjectorConfig
 from engine import EngineConfig, EngineGeometry
 from regulator import RegulatorConfig
+from openrocket_exporter import RSEComponent
 
 from constants import ATMOSPHERE_PRESSURE_PA, PI
 
@@ -125,7 +126,7 @@ ethanol_tank_initial = TankInitialCondition(
 
 ethanol_regulator = RegulatorConfig(
     name="ethanol_regulator",
-    set_pressure_pa=50*1e5, # 60 bar
+    set_pressure_pa=50*1e5, # 50 bar
     role="fuel"
 )
 
@@ -155,6 +156,82 @@ ethanol_injector = InjectorConfig(
     area_m2=6.5e-6,
     role="fuel",
 )
+
+
+#------------------------------
+# Squirtle sizing
+
+squirtle_n2_tank = TankConfig(
+    name="squirtle_nitrogen_tank",
+    role="pressurant",
+    fluid=NITROGEN,
+    tank_volume_m3=0.00075,    # 0.75L
+    phase_model="single_phase"
+)
+squirtle_n2_tank_initial = TankInitialCondition(
+    mode="pressure_temperature",
+    pressure_pa=3.5e+7,   # 350 bar
+    temperature_k=293.15 # 20C
+)
+
+
+squirtle_ethanol_tank = TankConfig(
+    name="squirtle_ethanol_tank",
+    role="fuel",
+    fluid=ETHANOL,
+    tank_volume_m3=0.0022, # 2.2 L
+    phase_model="pressurised_liquid",
+    pressurant_fluid=NITROGEN
+)
+squirtle_ethanol_tank_initial = TankInitialCondition(
+    mode="pressure_temperature_mass",
+    total_mass_kg=1.0, # actually liquid mass
+    temperature_k=293.15, # 20c
+    pressure_pa=50*1e5 # 50 bar
+)
+squirtle_ethanol_regulator = RegulatorConfig(
+    name="squirtle_ethanol_regulator",
+    set_pressure_pa=50*1e5, # 50 bar
+    role="fuel"
+)
+
+
+squirtle_n2o_tank = TankConfig(
+    name="squirtle_n2o_tank",
+    role="oxidiser",
+    fluid=NITROUS_OXIDE,
+    tank_volume_m3=0.01,    # 10L
+    phase_model="self_pressurised"
+)
+squirtle_n2o_tank_initial = TankInitialCondition(
+    mode="pressure_mass",
+    pressure_pa=60e+5,    # 60 bar
+    total_mass_kg=5
+)
+
+
+squirtle_n2o_injector = InjectorConfig(
+    cd=0.75,
+    area_m2=1.7e-5, # 17mm^2
+    role="oxidiser"
+)
+squirtle_ethanol_injector = InjectorConfig(
+    cd=0.75,
+    area_m2=3e-6, # 3mm^2
+    role="fuel"
+)
+
+
+
+squirtle_engine_geometry = EngineGeometry(
+    nozzle_throat_area_m2 = 4.15e-4, # throat diameter 23mm
+    expansion_ratio = 6.8
+)
+squirtle_engine = EngineConfig(
+    geometry = squirtle_engine_geometry
+)
+
+
 
 #------------------------------
 # Cases
@@ -227,4 +304,40 @@ full_biprop_case = SimCase(
     settings=SimulationSettings(dt_s=0.02, print_steps=10)
 
 )
+
+
+squirtle_case = SimCase(
+    name = "Squirtle Biprop Case",
+
+    tank_configs = {
+        "n2o_tank" : squirtle_n2o_tank,
+        "ethanol_tank" : squirtle_ethanol_tank,
+        "n2_tank" : squirtle_n2_tank
+        },
+
+    tank_initial_conditions={
+        "n2o_tank" : squirtle_n2o_tank_initial,
+        "ethanol_tank": squirtle_ethanol_tank_initial,
+        "n2_tank": squirtle_n2_tank_initial
+        },
+
+    injector_configs={
+        "n2o_injector" : squirtle_n2o_injector,
+        "ethanol_injector" : squirtle_ethanol_injector
+        },
+
+    regulator_configs={
+        "ethanol_regulator" : squirtle_ethanol_regulator
+        },
+    
+    engine_config=squirtle_engine,
+
+    settings=SimulationSettings(dt_s=0.02, t_final_s=15, print_steps=50)
+
+)
+
+
+
+#-------------------------------
+# OpenRocket exports
 

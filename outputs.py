@@ -1,11 +1,12 @@
 from pathlib import Path
 from typing import Any, Iterable
+import math
 
 import matplotlib.pyplot as plt
 
 import csv
 
-from simulation import SimRecord
+from simulation import SimRecord, SimPoint
 
 
 def safe_divide(value: float | None, divisor: float) -> float | None:
@@ -517,3 +518,182 @@ def log_results(
                     rowData.append(format_csv_value(value, precision))
 
             writer.writerow(rowData)
+
+
+
+def get_liquid_phase_mask(
+    simRecord: SimRecord,
+    tankName: str,
+    liquidPhaseThreshold: float = 0.01
+) -> list[bool]:
+
+    """
+    returns a mask indicating whether the specified tank still has any liquid present.
+    """
+
+    liquidMask: list[bool] = []
+
+    for point in simRecord.points:
+        tank = point.tanks.get(tankName) if point.tanks is not None else None
+
+        liquidMask.append(tank is not None and tank.liquid_mass_kg is not None and tank.liquid_mass_kg > liquidPhaseThreshold)
+
+    return liquidMask
+
+
+
+def get_engine_value(point: SimPoint, attributeName: str) -> float | None:
+
+
+    if point.engine is None:
+        return None
+
+    value = getattr(point.engine, attributeName, None)
+
+    if value is None or not math.isfinite(value):
+        return None
+
+    return value
+
+def trap_integrate(
+    simRecord: SimRecord,
+    attributeName: str,
+    mask: list[bool] | None = None
+) -> tuple[float, float]:
+
+    integral = 0.0
+    duration = 0.0
+
+    for index in range(len(simRecord.points) - 1):
+        point0 = simRecord.points[index]
+        point1 = simRecord.points[index + 1]
+
+        if mask is not None and not (mask[index] and mask[index + 1]):
+            continue
+
+        value0 = get_engine_value(point0, attributeName)
+        value1 = get_engine_value(point1, attributeName)
+
+        if value0 is None or value1 is None:
+            continue
+
+        dt = point1.time_s - point0.time_s
+
+        if dt <= 0:
+            continue
+
+
+        integral += 0.5 * (value0+value1) * dt
+        duration += dt
+
+    return(integral, duration)
+
+
+    
+
+def time_average(
+    simRecord: SimRecord,
+    attributeName: str,
+    mask: list[bool] | None = None
+) -> float | None:
+
+    integral, duration = trap_integrate(simRecord, attributeName, mask)
+
+    if duration <= 0:
+        return None
+
+    return integral / duration
+
+
+def format_value(
+    value: float | None,
+    precision: int = 2
+) -> str:
+
+    if value is None: 
+        return "N/A"
+
+    return f"{value:.{precision}f}"
+
+
+
+def print_sim_summary(
+    simRecord: SimRecord,
+    liquidTankName: str,
+) -> None:
+    """
+    Prints overall and liquid-phase engine performance stats.
+
+    reports:
+    - avg O/F
+    - avg thrust
+    - peak thrust
+    - avg ISP
+    - total impulse
+    """
+
+
+    if len(simRecord.points) < 2:
+        print("Not enough simulation data to calculate summary.")
+        return
+
+    liquidMask = get_liquid_phase_mask(
+        simRecord,
+        liquidTankName
+    )
+
+
+    # overall averages
+    avg_OF = time_average(simRecord,"mixture_ratio")
+    avg_thrust = time_average(simRecord,"thrust_n")
+    avg_isp = time_average(simRecord,"isp_s")
+
+    # liquid phase averages
+    liquid_avg_OF = time_average(simRecord,"mixture_ratio", liquidMask)
+    liquid_avg_thrust = time_average(simRecord,"thrust_n", liquidMask)
+    liquid_avg_isp = time_average(simRecord,"isp_s", liquidMask)
+
+    # overall stats
+    impulse, burn_time = trap_integrate(simRecord,"thrust_n")
+    liquid_impulse, liquid_burn_time = trap_integrate(simRecord,"thrust_n", liquidMask)
+    peak_thrust = max(
+        (
+            point.engine.thrust_n
+            for point in simRecord.points
+            if point.engine is not None
+            and point.engine.thrust_n is not None
+            and math.isfinite(point.engine.thrust_n)
+        ),
+        default=None,
+    )
+
+    print()
+    print("=== Engine Performance Summary ===")
+    print(f"Burn time:             {burn_time:10.3f} s")
+    print(f"Liquid phase:          {liquid_burn_time:10.3f} s")
+    print()
+    print("                         Overall       Liquid phase")
+    print("----------------------------------------------------")
+    print(
+        f"Average O/F:          "
+        f"{format_value(avg_OF):>10}       "
+        f"{format_value(liquid_avg_OF):>10}"
+    )
+    print(
+        f"Average thrust:       "
+        f"{format_value(avg_thrust):>10} N     "
+        f"{format_value(liquid_avg_thrust):>10} N"
+    )
+    print(
+        f"Average Isp:          "
+        f"{format_value(avg_isp):>10} s     "
+        f"{format_value(liquid_avg_isp):>10} s"
+    )
+    print()
+    print(f"Total impulse:        {impulse:10.1f} Ns")
+    print(f"Liquid impulse:       {liquid_impulse:10.1f} Ns")
+    print(
+        f"Peak thrust:          "
+        f"{format_value(peak_thrust):>10} N"
+    )
+    print("====================================================")
