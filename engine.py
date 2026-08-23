@@ -108,11 +108,11 @@ class EngineConfig:
 
             new_chamber_pressure_pa = total_mdot_kg_s * cstar_delivered_m_s / self.geometry.nozzle_throat_area_m2
             
-
+            chamber_pressure_pa = new_chamber_pressure_pa
+            
             if abs(new_chamber_pressure_pa - chamber_pressure_pa) / chamber_pressure_pa < pc_tolerance:
                 break
             
-            chamber_pressure_pa = new_chamber_pressure_pa
 
         chamber_temperature_k = cea.get_Tcomb(
             Pc=chamber_pressure_pa,

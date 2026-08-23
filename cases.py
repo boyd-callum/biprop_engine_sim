@@ -185,7 +185,7 @@ squirtle_ethanol_tank = TankConfig(
 )
 squirtle_ethanol_tank_initial = TankInitialCondition(
     mode="pressure_temperature_mass",
-    total_mass_kg=1.0, # actually liquid mass
+    total_mass_kg=1.5, # actually liquid mass
     temperature_k=293.15, # 20c
     pressure_pa=50*1e5 # 50 bar
 )
@@ -212,12 +212,12 @@ squirtle_n2o_tank_initial = TankInitialCondition(
 
 squirtle_n2o_injector = InjectorConfig(
     cd=0.75,
-    area_m2=1.7e-5, # 17mm^2
+    area_m2=1.77e-5, # 15.7mm^2
     role="oxidiser"
 )
 squirtle_ethanol_injector = InjectorConfig(
     cd=0.75,
-    area_m2=3e-6, # 3mm^2
+    area_m2=3.17e-6, # 3mm^2
     role="fuel"
 )
 
@@ -225,10 +225,12 @@ squirtle_ethanol_injector = InjectorConfig(
 
 squirtle_engine_geometry = EngineGeometry(
     nozzle_throat_area_m2 = 4.15e-4, # throat diameter 23mm
-    expansion_ratio = 6.8
+    expansion_ratio = 4.3
 )
 squirtle_engine = EngineConfig(
-    geometry = squirtle_engine_geometry
+    geometry = squirtle_engine_geometry,
+    cstar_efficiency=0.90,
+    cf_efficiency=0.95
 )
 
 

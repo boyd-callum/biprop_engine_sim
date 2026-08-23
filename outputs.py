@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TYPE_CHECKING
 import math
 
 import matplotlib.pyplot as plt
@@ -7,17 +7,10 @@ import matplotlib.pyplot as plt
 import csv
 
 from simulation import SimRecord, SimPoint
+from helpers import safe_divide, get_single_config_by_role, get_tank_phase_model
 
-
-def safe_divide(value: float | None, divisor: float) -> float | None:
-    """
-    Safely divides a value by a divisor, preserving None values.
-    """
-
-    if value is None:
-        return None
-
-    return value / divisor
+if TYPE_CHECKING:
+    from tanks import PhaseModel
 
 
 def append_tank_series(
@@ -92,52 +85,6 @@ def append_engine_series(
     series["engine_cf_ideal"].append(engineState.cf_ideal)
     series["engine_cf_delivered"].append(engineState.cf_delivered)
 
-
-def get_ylabel(seriesKey: str) -> str:
-    """
-    Returns a suitable y-axis label for a plotted series key.
-    """
-
-    if "pressure" in seriesKey:
-        return "Pressure (bar)"
-    if "temperature" in seriesKey:
-        return "Temperature (K)"
-    if "mass" in seriesKey:
-        return "Mass (kg)"
-    if "energy" in seriesKey:
-        return "Energy (kJ)"
-    if "mdot" in seriesKey:
-        return "Mass flow rate (kg/s)"
-    if "thrust" in seriesKey:
-        return "Thrust (N)"
-    if "isp" in seriesKey:
-        return "Specific impulse (s)"
-    if "mixture_ratio" in seriesKey:
-        return "O/F ratio"
-    if "cstar" in seriesKey:
-        return "c* (m/s)"
-    if "cf" in seriesKey:
-        return "Thrust coefficient"
-
-    return "Value"
-
-
-def should_force_positive_y(seriesKey: str) -> bool:
-    """
-    Returns True if the plotted quantity should normally be non-negative.
-    """
-
-    positiveKeywords = [
-        "pressure",
-        "mass",
-        "mdot",
-        "thrust",
-        "isp",
-        "cstar",
-        "cf",
-    ]
-
-    return any(keyword in seriesKey for keyword in positiveKeywords)
 
 
 def build_sim_series(
@@ -231,129 +178,448 @@ def build_sim_series(
     return timeSList, series, tankNames, injectorNames, regulatorNames
 
 
-def get_combined_mass_plot_keys(
-    simRecord: SimRecord,
-    tankNames: list[str],
-) -> list[str]:
+def create_column_axes(
+    fig: Any,
+    gridCell: Any,
+    rowCount: int
+) -> list[Any]:
+
     """
-    Returns combined mass plot keys for tanks where multiple mass components
-    are useful to view together.
+    creates vertically stacked axes within one figure column
+    all axes within the column share the same time axis
     """
 
-    if len(simRecord.points) == 0:
-        return []
+    subGrid = gridCell.subgridspec(
+        rowCount,
+        1,
+        hspace=0.08
+    )
 
-    firstPoint = simRecord.points[0]
+    axes: list[Any] = []
 
-    massModels = {"self_pressurised", "pressurised_liquid"}
-    massPlotKeys: list[str] = []
+    for rowIndex in range(rowCount):
 
-    for tankName in tankNames:
-        tankState = firstPoint.tanks.get(tankName) if firstPoint.tanks else None
+        if rowIndex == 0:
+            ax = fig.add_subplot(subGrid[rowIndex, 0])
 
-        if tankState is None:
-            continue
+        else:
+            ax = fig.add_subplot(subGrid[rowIndex, 0], sharex=axes[0])
 
-        phaseModel = getattr(tankState.config, "phase_model", None)
+        axes.append(ax)
 
-        if phaseModel in massModels:
-            massPlotKeys.append(f"{tankName}_all_masses")
 
-    return massPlotKeys
+    for ax in axes[:-1]:
+
+        ax.tick_params(axis="x", labelbottom=False)
+
+    axes[-1].set_xlabel("Time(s)")
+
+    return axes
+
+
+
+def plot_tank_mass(
+    ax: Any,
+    timeSList: list[float],
+    series: dict[str, list[float | None]],
+    tankName: str,
+    phaseModel: PhaseModel
+) -> None:
+
+
+
+    """
+    plots mass components for each tank model.
+
+    self-pressurised:
+        liquid + vapour + total
+
+    pressurised liquid:
+        liquid + pressurant + total
+
+    single phase:
+        total only
+    """
+
+
+    if phaseModel == "self_pressurised":
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_liquid_mass_kg"],
+            label="liquid",
+        )
+
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_vapour_mass_kg"],
+            label="vapour",
+        )
+
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_total_mass_kg"],
+            label="total",
+        )
+
+        ax.legend(fontsize="small")
+
+    elif phaseModel == "pressurised_liquid":
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_liquid_mass_kg"],
+            label="liquid",
+        )
+
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_pressurant_gas_mass_kg"],
+            label="pressurant",
+        )
+
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_total_mass_kg"],
+            label="total",
+        )
+
+        ax.legend(fontsize="small")
+
+    else:
+        # single_phase
+        ax.plot(
+            timeSList,
+            series[f"{tankName}_total_mass_kg"],
+        )
+
+    ax.set_ylim(bottom=0)
+
+
+
 
 
 def plot_sim_record(
     simRecord: SimRecord,
     file_path: str | Path | None = None,
-    cols: int = 3,
     show: bool = True,
 ) -> None:
     """
-    Plots all available tank, injector, regulator, and engine data in a
-    SimRecord.
+    Plots simulation results in a single figure.
 
-    Args:
-        simRecord:
-            Completed simulation record.
-        savePath:
-            Optional file path for saving the generated figure.
-        cols:
-            Number of subplot columns.
-        show:
-            Whether to display the figure using ``plt.show()``.
+    Columns:
+        - one column per tank
+        - feed system
+        - engine
+
+    Tank columns:
+        - pressure
+        - temperature
+        - relevant masses
+        - internal energy
+
+    Feed-system column:
+        - injector mass flows
+        - regulator mass flows
+        - total engine mass flow
+
+    Engine column:
+        - chamber + fuel + oxidiser tank pressures
+        - chamber temperature
+        - thrust
+        - specific impulse
+        - mixture ratio
+        - characteristic velocity
+        - thrust coefficient
     """
 
-    timeSList, series, tankNames, _, _ = build_sim_series(simRecord)
+    (
+        timeSList,
+        series,
+        tankNames,
+        injectorNames,
+        regulatorNames,
+    ) = build_sim_series(simRecord)
 
     if len(series) == 0:
         print("No series to plot.")
         return
 
-    plotKeys = list(series.keys())
-    plotKeys.extend(get_combined_mass_plot_keys(simRecord, tankNames))
+    firstPoint = simRecord.points[0]
 
-    numPlots = len(plotKeys)
-    rows = (numPlots + cols - 1) // cols
+    # --------------------------------------------------------
+    # Identify fuel and oxidiser tanks
+    # --------------------------------------------------------
 
-    fig, axs = plt.subplots(
-        rows,
-        cols,
-        figsize=(4 * cols, 3 * rows),
+    tankConfigs = {
+        tankName: tankState.config
+        for tankName, tankState in firstPoint.tanks.items()
+    }
+
+    oxidiserTankName, _ = get_single_config_by_role(
+        tankConfigs,
+        "oxidiser",
+        "tank",
     )
 
-    axsFlat = axs.flatten() if hasattr(axs, "flatten") else [axs]
+    fuelTankName, _ = get_single_config_by_role(
+        tankConfigs,
+        "fuel",
+        "tank",
+    )
 
-    lastIndex = -1
+    # --------------------------------------------------------
+    # Feed-system plots
+    # --------------------------------------------------------
 
-    for lastIndex, plotKey in enumerate(plotKeys):
-        ax = axsFlat[lastIndex]
+    feedPlots: list[
+        tuple[str, str, str]
+    ] = []
 
-        if plotKey.endswith("_all_masses"):
-            tankName = plotKey.removesuffix("_all_masses")
-
-            ax.plot(
-                timeSList,
-                series[f"{tankName}_liquid_mass_kg"],
-                label="liquid mass",
+    for injectorName in injectorNames:
+        feedPlots.append(
+            (
+                injectorName.replace("_", " "),
+                f"{injectorName}_mdot_kg_s",
+                "Mass flow (kg/s)",
             )
-            ax.plot(
-                timeSList,
-                series[f"{tankName}_vapour_mass_kg"],
-                label="vapour mass",
+        )
+
+    for regulatorName in regulatorNames:
+        feedPlots.append(
+            (
+                regulatorName.replace("_", " "),
+                f"{regulatorName}_mdot_kg_s",
+                "Mass flow (kg/s)",
             )
-            ax.plot(
-                timeSList,
-                series[f"{tankName}_pressurant_gas_mass_kg"],
-                label="pressurant mass",
-            )
-            ax.plot(
-                timeSList,
-                series[f"{tankName}_total_mass_kg"],
-                label="total mass",
-            )
+        )
 
-            ax.set_title(f"{tankName} all masses")
-            ax.set_xlabel("Time (s)")
-            ax.set_ylabel("Mass (kg)")
-            ax.set_ylim(bottom=0)
-            ax.legend()
-            continue
+    feedPlots.append(
+        (
+            "Engine total mass flow",
+            "engine_total_mdot_kg_s",
+            "Mass flow (kg/s)",
+        )
+    )
 
-        ax.plot(timeSList, series[plotKey])
-        ax.set_title(plotKey.replace("_", " "))
-        ax.set_xlabel("Time (s)")
-        ax.set_ylabel(get_ylabel(plotKey))
+    # --------------------------------------------------------
+    # Engine plots
+    # --------------------------------------------------------
 
-        if should_force_positive_y(plotKey):
-            ax.set_ylim(bottom=0)
+    enginePlots: list[
+        tuple[
+            str,
+            str,
+            list[
+                tuple[
+                    str,
+                    str | None,
+                ]
+            ],
+        ]
+    ] = [
+        (
+            "Pressure",
+            "Pressure (bar)",
+            [
+                (
+                    "engine_chamber_pressure_bar",
+                    "chamber",
+                ),
+                (
+                    f"{oxidiserTankName}_pressure_bar",
+                    "oxidiser tank",
+                ),
+                (
+                    f"{fuelTankName}_pressure_bar",
+                    "fuel tank",
+                ),
+            ],
+        ),
+        (
+            "Chamber temperature",
+            "Temperature (K)",
+            [
+                (
+                    "engine_chamber_temperature_k",
+                    None,
+                ),
+            ],
+        ),
+        (
+            "Thrust",
+            "Thrust (N)",
+            [
+                (
+                    "engine_thrust_n",
+                    None,
+                ),
+            ],
+        ),
+        (
+            "Specific impulse",
+            "Isp (s)",
+            [
+                (
+                    "engine_isp_s",
+                    None,
+                ),
+            ],
+        ),
+        (
+            "Mixture ratio",
+            "O/F",
+            [
+                (
+                    "engine_mixture_ratio",
+                    None,
+                ),
+            ],
+        ),
+        (
+            "Characteristic velocity",
+            "c* (m/s)",
+            [
+                (
+                    "engine_cstar_ideal_m_s",
+                    "ideal",
+                ),
+                (
+                    "engine_cstar_delivered_m_s",
+                    "delivered",
+                ),
+            ],
+        ),
+        (
+            "Thrust coefficient",
+            "Cf",
+            [
+                (
+                    "engine_cf_ideal",
+                    "ideal",
+                ),
+                (
+                    "engine_cf_delivered",
+                    "delivered",
+                ),
+            ],
+        ),
+    ]
 
-    for axisIndex in range(lastIndex + 1, len(axsFlat)):
-        axsFlat[axisIndex].axis("off")
+        # --------------------------------------------------------
+    # Main figure
+    # --------------------------------------------------------
 
-    plt.tight_layout()
+    totalColumns = len(tankNames) + 2
+    maxRows = max(4, len(feedPlots), len(enginePlots))
+
+    fig = plt.figure(
+        figsize=(4 * totalColumns, 2.2 * maxRows),
+        constrained_layout=True,
+    )
+
+    mainGrid = fig.add_gridspec(1, totalColumns, wspace=0.25)
+
+    # --------------------------------------------------------
+    # Tank columns
+    # --------------------------------------------------------
+
+    for columnIndex, tankName in enumerate(tankNames):
+        axes = create_column_axes(fig, mainGrid[0, columnIndex], 4)
+
+        pressureAx = axes[0]
+        temperatureAx = axes[1]
+        massAx = axes[2]
+        energyAx = axes[3]
+
+        tankState = firstPoint.tanks.get(tankName)
+        phaseModel = get_tank_phase_model(tankState)
+        tankTitle = tankName.replace("_", " ")
+
+        # Pressure
+        pressureAx.plot(timeSList, series[f"{tankName}_pressure_bar"])
+        pressureAx.set_title(f"{tankTitle} - Pressure")
+        pressureAx.set_ylabel("Pressure (bar)")
+        pressureAx.set_ylim(bottom=0)
+
+        # Temperature
+        temperatureAx.plot(timeSList, series[f"{tankName}_temperature_k"])
+        temperatureAx.set_title(f"{tankTitle} - Temperature")
+        temperatureAx.set_ylabel("Temperature (K)")
+
+        # Mass
+        plot_tank_mass(massAx, timeSList, series, tankName, phaseModel)
+        massAx.set_title(f"{tankTitle} - Mass")
+        massAx.set_ylabel("Mass (kg)")
+
+        # Internal energy
+        energyAx.plot(timeSList, series[f"{tankName}_total_internal_energy_kj"])
+        energyAx.set_title(f"{tankTitle} - Internal energy")
+        energyAx.set_ylabel("Energy (kJ)")
+
+    # --------------------------------------------------------
+    # Feed-system column
+    # --------------------------------------------------------
+
+    feedColumnIndex = len(tankNames)
+
+    feedAxes = create_column_axes(
+        fig,
+        mainGrid[0, feedColumnIndex],
+        len(feedPlots),
+    )
+
+    for plotIndex, (title, seriesKey, ylabel) in enumerate(feedPlots):
+        ax = feedAxes[plotIndex]
+
+        ax.plot(timeSList, series[seriesKey])
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(bottom=0)
+
+    # --------------------------------------------------------
+    # Engine column
+    # --------------------------------------------------------
+
+    engineColumnIndex = len(tankNames) + 1
+
+    engineAxes = create_column_axes(
+        fig,
+        mainGrid[0, engineColumnIndex],
+        len(enginePlots),
+    )
+
+    for plotIndex, (title, ylabel, plotSeries) in enumerate(enginePlots):
+        ax = engineAxes[plotIndex]
+
+        for seriesKey, label in plotSeries:
+            ax.plot(timeSList, series[seriesKey], label=label)
+
+        ax.set_title(title)
+        ax.set_ylabel(ylabel)
+        ax.set_ylim(bottom=0)
+
+        # # Force zero baseline where useful
+        # if title in {
+        #     "Pressure",
+        #     "Thrust",
+        #     "Specific impulse",
+        #     "Characteristic velocity",
+        #     "Thrust coefficient",
+        # }:
+        #     ax.set_ylim(bottom=0)
+
+        if any(label is not None for _, label in plotSeries):
+            ax.legend(fontsize="small")
+
+    # --------------------------------------------------------
+    # Save / display
+    # --------------------------------------------------------
 
     if file_path is not None:
-        fig.savefig(file_path, dpi=300)
+        fig.savefig(
+            file_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
 
     if show:
         plt.show()
@@ -628,6 +894,8 @@ def print_sim_summary(
     - avg O/F
     - avg thrust
     - peak thrust
+    - avg chamber pressure
+    - peak chamber pressure
     - avg ISP
     - total impulse
     """
@@ -646,12 +914,27 @@ def print_sim_summary(
     # overall averages
     avg_OF = time_average(simRecord,"mixture_ratio")
     avg_thrust = time_average(simRecord,"thrust_n")
+    avg_chamber_pressure_pa = time_average(simRecord, "chamber_pressure_pa")
     avg_isp = time_average(simRecord,"isp_s")
 
     # liquid phase averages
     liquid_avg_OF = time_average(simRecord,"mixture_ratio", liquidMask)
     liquid_avg_thrust = time_average(simRecord,"thrust_n", liquidMask)
+    liquid_avg_chamber_pressure_pa = time_average(simRecord, "chamber_pressure_pa", liquidMask)
     liquid_avg_isp = time_average(simRecord,"isp_s", liquidMask)
+
+    # convert pressures to bar
+    avg_chamber_pressure_bar = (
+        avg_chamber_pressure_pa / 1e5
+        if avg_chamber_pressure_pa is not None
+        else None
+    )
+
+    liquid_avg_chamber_pressure_bar = (
+        liquid_avg_chamber_pressure_pa / 1e5
+        if liquid_avg_chamber_pressure_pa is not None
+        else None
+    )
 
     # overall stats
     impulse, burn_time = trap_integrate(simRecord,"thrust_n")
@@ -665,6 +948,21 @@ def print_sim_summary(
             and math.isfinite(point.engine.thrust_n)
         ),
         default=None,
+    )
+    peak_chamber_pressure_pa = max(
+        (
+            point.engine.chamber_pressure_pa
+            for point in simRecord.points
+            if point.engine is not None
+            and point.engine.chamber_pressure_pa is not None
+            and math.isfinite(point.engine.chamber_pressure_pa)
+        ),
+        default=None,
+    )
+    peak_chamber_pressure_bar = (
+        peak_chamber_pressure_pa / 1e5
+        if peak_chamber_pressure_pa is not None
+        else None
     )
 
     print()
@@ -685,6 +983,11 @@ def print_sim_summary(
         f"{format_value(liquid_avg_thrust):>10} N"
     )
     print(
+        f"Average chamber P:    "
+        f"{format_value(avg_chamber_pressure_bar):>10} bar   "
+        f"{format_value(liquid_avg_chamber_pressure_bar):>10} bar"
+    )
+    print(
         f"Average Isp:          "
         f"{format_value(avg_isp):>10} s     "
         f"{format_value(liquid_avg_isp):>10} s"
@@ -695,5 +998,9 @@ def print_sim_summary(
     print(
         f"Peak thrust:          "
         f"{format_value(peak_thrust):>10} N"
+    )
+    print(
+        f"Peak chamber pressure:"
+        f"{format_value(peak_chamber_pressure_bar):>10} bar"
     )
     print("====================================================")

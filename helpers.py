@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Literal, Mapping, overload, Callable
 
 if TYPE_CHECKING:
     from simulation import SimRecord
-    from tanks import TankConfig, SourceRole
+    from tanks import TankConfig, SourceRole, TankState
     from injector import InjectorConfig
     from regulator import RegulatorConfig, PropellantRole
 
@@ -165,3 +165,24 @@ def get_tank_debug_string(tank_id: str, tank_config: TankConfig) -> str:
         f"pressurant_mass={state.pressurant_gas_mass_kg}, "
         f"total_mass={state.total_mass_kg}"
     )
+
+
+def safe_divide(value: float | None, divisor: float) -> float | None:
+    """
+    Safely divides a value by a divisor, preserving None values.
+    """
+
+    if value is None:
+        return None
+
+    return value / divisor
+
+
+def get_tank_phase_model(
+    tankState: TankState | None
+) -> str | None:
+
+    if tankState is None:
+        return None
+
+    return tankState.config.phase_model
