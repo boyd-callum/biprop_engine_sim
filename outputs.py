@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Iterable, TYPE_CHECKING
 import math
+from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 
@@ -597,16 +598,6 @@ def plot_sim_record(
         ax.set_ylabel(ylabel)
         ax.set_ylim(bottom=0)
 
-        # # Force zero baseline where useful
-        # if title in {
-        #     "Pressure",
-        #     "Thrust",
-        #     "Specific impulse",
-        #     "Characteristic velocity",
-        #     "Thrust coefficient",
-        # }:
-        #     ax.set_ylim(bottom=0)
-
         if any(label is not None for _, label in plotSeries):
             ax.legend(fontsize="small")
 
@@ -883,14 +874,38 @@ def format_value(
 
 
 
-def print_sim_summary(
+@dataclass
+class SimSummary:
+    burn_time_s: float
+    liquid_burn_time_s: float
+
+    avg_of: float | None
+    liquid_avg_of: float | None
+
+    avg_thrust_n: float | None
+    liquid_avg_thrust_n: float | None
+    peak_thrust_n: float | None
+
+    avg_chamber_pressure_bar: float | None
+    liquid_avg_chamber_pressure_bar: float | None
+    peak_chamber_pressure_bar: float | None
+
+    avg_isp_s: float | None
+    liquid_avg_isp_s: float | None
+
+    total_impulse_ns: float
+    liquid_impulse_ns: float
+
+
+
+
+def calculate_sim_summary(
     simRecord: SimRecord,
     liquidTankName: str,
-) -> None:
+) -> SimSummary:
     """
-    Prints overall and liquid-phase engine performance stats.
+    calculates overall and liquid-phase engine performance stats.
 
-    reports:
     - avg O/F
     - avg thrust
     - peak thrust
@@ -965,42 +980,83 @@ def print_sim_summary(
         else None
     )
 
+    return SimSummary(
+        burn_time_s=burn_time,
+        liquid_burn_time_s=liquid_burn_time,
+
+        avg_of=avg_OF,
+        liquid_avg_of=liquid_avg_OF,
+
+        avg_thrust_n=avg_thrust,
+        liquid_avg_thrust_n=liquid_avg_thrust,
+        peak_thrust_n=peak_thrust,
+
+        avg_chamber_pressure_bar=avg_chamber_pressure_bar,
+        liquid_avg_chamber_pressure_bar=liquid_avg_chamber_pressure_bar,
+        peak_chamber_pressure_bar=peak_chamber_pressure_bar,
+
+        avg_isp_s=avg_isp,
+        liquid_avg_isp_s=liquid_avg_isp,
+
+        total_impulse_ns=impulse,
+        liquid_impulse_ns=liquid_impulse,
+    )
+
+
+def print_sim_summary(
+    simRecord: SimRecord,
+    liquidTankName: str,
+) -> None:
+    """
+    Prints overall and liquid-phase engine performance stats.
+    """
+
+    summary = calculate_sim_summary(
+        simRecord,
+        liquidTankName,
+    )
+
+    if summary is None:
+        print("Not enough simulation data to calculate summary.")
+        return
+
+
     print()
     print("=== Engine Performance Summary ===")
-    print(f"Burn time:             {burn_time:10.3f} s")
-    print(f"Liquid phase:          {liquid_burn_time:10.3f} s")
+    print(f"Burn time:             {summary.burn_time_s:10.3f} s")
+    print(f"Liquid phase:          {summary.liquid_burn_time_s:10.3f} s")
     print()
     print("                         Overall       Liquid phase")
     print("----------------------------------------------------")
     print(
         f"Average O/F:          "
-        f"{format_value(avg_OF):>10}       "
-        f"{format_value(liquid_avg_OF):>10}"
+        f"{format_value(summary.avg_of):>10}       "
+        f"{format_value(summary.liquid_avg_of):>10}"
     )
     print(
         f"Average thrust:       "
-        f"{format_value(avg_thrust):>10} N     "
-        f"{format_value(liquid_avg_thrust):>10} N"
+        f"{format_value(summary.avg_thrust_n):>10} N     "
+        f"{format_value(summary.liquid_avg_thrust_n):>10} N"
     )
     print(
         f"Average chamber P:    "
-        f"{format_value(avg_chamber_pressure_bar):>10} bar   "
-        f"{format_value(liquid_avg_chamber_pressure_bar):>10} bar"
+        f"{format_value(summary.avg_chamber_pressure_bar):>10} bar   "
+        f"{format_value(summary.liquid_avg_chamber_pressure_bar):>10} bar"
     )
     print(
         f"Average Isp:          "
-        f"{format_value(avg_isp):>10} s     "
-        f"{format_value(liquid_avg_isp):>10} s"
+        f"{format_value(summary.avg_isp_s):>10} s     "
+        f"{format_value(summary.liquid_avg_isp_s):>10} s"
     )
     print()
-    print(f"Total impulse:        {impulse:10.1f} Ns")
-    print(f"Liquid impulse:       {liquid_impulse:10.1f} Ns")
+    print(f"Total impulse:        {summary.total_impulse_ns:10.1f} Ns")
+    print(f"Liquid impulse:       {summary.liquid_impulse_ns:10.1f} Ns")
     print(
         f"Peak thrust:          "
-        f"{format_value(peak_thrust):>10} N"
+        f"{format_value(summary.peak_thrust_n):>10} N"
     )
     print(
         f"Peak chamber pressure:"
-        f"{format_value(peak_chamber_pressure_bar):>10} bar"
+        f"{format_value(summary.peak_chamber_pressure_bar):>10} bar"
     )
     print("====================================================")

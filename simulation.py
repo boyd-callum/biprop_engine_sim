@@ -609,7 +609,7 @@ def biprop_simulate(
         ox_tank_state = tank_states[ox_tank_id]
         fuel_tank_state = tank_states[fuel_tank_id]
 
-        if step_index % case.settings.print_steps == 0:
+        if case.settings.print_updates and step_index % case.settings.print_steps == 0:
 
         
             print_parts = [

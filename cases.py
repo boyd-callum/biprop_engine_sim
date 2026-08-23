@@ -18,6 +18,7 @@ from constants import ATMOSPHERE_PRESSURE_PA, PI
 class SimulationSettings:
     dt_s: float = 0.01
     t_final_s: float = 10.0
+    print_updates: bool = True
     print_steps: int = 10
 
 
@@ -334,7 +335,7 @@ squirtle_case = SimCase(
     
     engine_config=squirtle_engine,
 
-    settings=SimulationSettings(dt_s=0.02, t_final_s=15, print_steps=50)
+    settings=SimulationSettings(dt_s=0.02, t_final_s=15, print_steps=50, print_updates=False)
 
 )
 
