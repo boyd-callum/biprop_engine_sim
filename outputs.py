@@ -1060,3 +1060,184 @@ def print_sim_summary(
         f"{format_value(summary.peak_chamber_pressure_bar):>10} bar"
     )
     print("====================================================")
+
+
+
+def plot_linkedin_summary(
+    simRecord: SimRecord,
+    oxidiserInjectorName: str,
+    fuelInjectorName: str,
+    file_path: str | Path | None = None,
+    show: bool = True,
+) -> None:
+    """
+    Creates a compact 2x2 simulation summary figure.
+
+    Plots:
+        - thrust
+        - oxidiser tank mass breakdown
+        - fuel tank mass breakdown
+        - oxidiser and fuel injector mass flow
+    """
+
+    (
+        timeSList,
+        series,
+        tankNames,
+        injectorNames,
+        _,
+    ) = build_sim_series(simRecord)
+
+    if len(series) == 0:
+        print("No series to plot.")
+        return
+
+    firstPoint = simRecord.points[0]
+
+    # --------------------------------------------------------
+    # Identify fuel and oxidiser tanks
+    # --------------------------------------------------------
+
+    tankConfigs = {
+        tankName: tankState.config
+        for tankName, tankState in firstPoint.tanks.items()
+    }
+
+    oxidiserTankName, _ = get_single_config_by_role(
+        tankConfigs,
+        "oxidiser",
+        "tank",
+    )
+
+    fuelTankName, _ = get_single_config_by_role(
+        tankConfigs,
+        "fuel",
+        "tank",
+    )
+
+    # --------------------------------------------------------
+    # Validate injector names
+    # --------------------------------------------------------
+
+    if oxidiserInjectorName not in injectorNames:
+        raise ValueError(
+            f"Oxidiser injector '{oxidiserInjectorName}' not found. "
+            f"Available injectors: {injectorNames}"
+        )
+
+    if fuelInjectorName not in injectorNames:
+        raise ValueError(
+            f"Fuel injector '{fuelInjectorName}' not found. "
+            f"Available injectors: {injectorNames}"
+        )
+
+    # --------------------------------------------------------
+    # Figure
+    # --------------------------------------------------------
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(12, 8),
+        sharex=True,
+        constrained_layout=True,
+    )
+
+    thrustAx = axes[0, 0]
+    oxidiserMassAx = axes[0, 1]
+    fuelMassAx = axes[1, 0]
+    mdotAx = axes[1, 1]
+
+    # --------------------------------------------------------
+    # Thrust
+    # --------------------------------------------------------
+
+    thrustAx.plot(
+        timeSList,
+        series["engine_thrust_n"],
+    )
+    thrustAx.set_title("Thrust")
+    thrustAx.set_ylabel("Thrust (N)")
+    thrustAx.set_ylim(bottom=0)
+
+    # --------------------------------------------------------
+    # Oxidiser tank mass
+    # --------------------------------------------------------
+
+    oxidiserTankState = firstPoint.tanks[oxidiserTankName]
+    oxidiserPhaseModel = get_tank_phase_model(oxidiserTankState)
+
+    plot_tank_mass(
+        oxidiserMassAx,
+        timeSList,
+        series,
+        oxidiserTankName,
+        oxidiserPhaseModel,
+    )
+
+    oxidiserMassAx.set_title("N₂O Tank Mass")
+    oxidiserMassAx.set_ylabel("Mass (kg)")
+
+    # --------------------------------------------------------
+    # Fuel tank mass
+    # --------------------------------------------------------
+
+    fuelTankState = firstPoint.tanks[fuelTankName]
+    fuelPhaseModel = get_tank_phase_model(fuelTankState)
+
+    plot_tank_mass(
+        fuelMassAx,
+        timeSList,
+        series,
+        fuelTankName,
+        fuelPhaseModel,
+    )
+
+    fuelMassAx.set_title("Ethanol Tank Mass")
+    fuelMassAx.set_ylabel("Mass (kg)")
+
+    # --------------------------------------------------------
+    # Propellant mass flow
+    # --------------------------------------------------------
+
+    mdotAx.plot(
+        timeSList,
+        series[f"{oxidiserInjectorName}_mdot_kg_s"],
+        label="N₂O",
+    )
+    mdotAx.plot(
+        timeSList,
+        series[f"{fuelInjectorName}_mdot_kg_s"],
+        label="Ethanol",
+    )
+
+    mdotAx.set_title("Propellant Mass Flow")
+    mdotAx.set_ylabel("Mass flow (kg/s)")
+    mdotAx.set_ylim(bottom=0)
+    mdotAx.legend()
+
+    # --------------------------------------------------------
+    # Shared formatting
+    # --------------------------------------------------------
+
+    for ax in axes.flat:
+        ax.grid(alpha=0.25)
+
+    fuelMassAx.set_xlabel("Time (s)")
+    mdotAx.set_xlabel("Time (s)")
+
+    # --------------------------------------------------------
+    # Save / display
+    # --------------------------------------------------------
+
+    if file_path is not None:
+        fig.savefig(
+            file_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    if show:
+        plt.show()
+
+    plt.close(fig)

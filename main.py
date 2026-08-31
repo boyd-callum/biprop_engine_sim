@@ -1,7 +1,7 @@
 from simulation import biprop_simulate
 from cases import full_biprop_case, squirtle_case
 
-from outputs import plot_sim_record, log_results, print_sim_summary
+from outputs import plot_sim_record, log_results, print_sim_summary, plot_linkedin_summary
 from sweep import *
 
 import numpy as np
@@ -12,19 +12,26 @@ if __name__ == "__main__":
     """
     run case and plot results
     """
-    # case = squirtle_case
+    case = squirtle_case
 
-    # sim_record = biprop_simulate(case, record=True)
+    sim_record = biprop_simulate(case, record=True)
 
-    # if sim_record is None:
-    #     raise ValueError("Simulation completed without recording.")
-    # else:
-    #     print(f"Simulation completed with {len(sim_record.points)} recorded points.")
+    if sim_record is None:
+        raise ValueError("Simulation completed without recording.")
+    else:
+        print(f"Simulation completed with {len(sim_record.points)} recorded points.")
     
-    # print_sim_summary(
-    #     simRecord=sim_record,
-    #     liquidTankName="n2o_tank"
-    # )
+    print_sim_summary(
+        simRecord=sim_record,
+        liquidTankName="n2o_tank"
+    )
+
+    plot_linkedin_summary(
+        sim_record,
+        oxidiserInjectorName="n2o_injector",
+        fuelInjectorName="ethanol_injector",
+        file_path="plots/squirtle_linkedin_summary.png",
+    )
 
     # plot_sim_record(
     #     simRecord=sim_record,
@@ -186,46 +193,46 @@ if __name__ == "__main__":
     # # Timestep convergence
     # # --------------------------------------------------------
 
-    results = run_1D_sweep(
-        squirtle_case,
-        values=[
-            0.100,
-            0.050,
-            0.025,
-            0.020,
-            0.010,
-            0.005,
-            0.0025,
-            0.001,
-        ],
-        modify_case=set_timestep,
-        parameter_name="dt_s"
-    )
+    # results = run_1D_sweep(
+    #     squirtle_case,
+    #     values=[
+    #         0.100,
+    #         0.050,
+    #         0.025,
+    #         0.020,
+    #         0.010,
+    #         0.005,
+    #         0.0025,
+    #         0.001,
+    #     ],
+    #     modify_case=set_timestep,
+    #     parameter_name="dt_s"
+    # )
 
-    plot_1D_sweep(
-        results,
-        x_parameter="dt_s",
-        y_parameter="total_impulse_ns",
-        file_path="plots/squirtle_timestep_vs_impulse.png"
-    )
+    # plot_1D_sweep(
+    #     results,
+    #     x_parameter="dt_s",
+    #     y_parameter="total_impulse_ns",
+    #     file_path="plots/squirtle_timestep_vs_impulse.png"
+    # )
 
-    plot_1D_sweep(
-        results,
-        x_parameter="dt_s",
-        y_parameter="liquid_avg_of",
-        file_path="plots/squirtle_timestep_vs_liquid_of.png"
-    )
+    # plot_1D_sweep(
+    #     results,
+    #     x_parameter="dt_s",
+    #     y_parameter="liquid_avg_of",
+    #     file_path="plots/squirtle_timestep_vs_liquid_of.png"
+    # )
 
-    plot_1D_sweep(
-        results,
-        x_parameter="dt_s",
-        y_parameter="liquid_avg_thrust_n",
-        file_path="plots/squirtle_timestep_vs_liquid_thrust.png"
-    )
+    # plot_1D_sweep(
+    #     results,
+    #     x_parameter="dt_s",
+    #     y_parameter="liquid_avg_thrust_n",
+    #     file_path="plots/squirtle_timestep_vs_liquid_thrust.png"
+    # )
 
-    plot_1D_sweep(
-        results,
-        x_parameter="dt_s",
-        y_parameter="liquid_avg_chamber_pressure_bar",
-        file_path="plots/squirtle_timestep_vs_liquid_pc.png"
-    )
+    # plot_1D_sweep(
+    #     results,
+    #     x_parameter="dt_s",
+    #     y_parameter="liquid_avg_chamber_pressure_bar",
+    #     file_path="plots/squirtle_timestep_vs_liquid_pc.png"
+    # )
