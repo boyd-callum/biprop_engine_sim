@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 
 from dataclasses import dataclass
@@ -56,47 +57,69 @@ class Fluid:
         return R_UNIVERSAL / self.get_molar_mass()
     
 
+    def get_saturated_vapour_gamma(self, temperature_k: float) -> float:
+        """
+        Return gamma = cp/cv for saturated vapour at the given temperature.
+        """
+
+        cp = PropsSI("Cpmass", "T", temperature_k, "Q", 1.0, self.coolprop_key)
+        cv = PropsSI("Cvmass", "T", temperature_k, "Q", 1.0, self.coolprop_key)
+
+        return cp / cv
+
+
     def get_gamma_at_PT(self, pressure_pa: float, temperature_k: float) -> float:
         """"
         Return gamma = cp/cv at given temp and pressure
 
-        For nitrous, coolprop can fail if the state lies exactly on or close to the saturation curve, so this function nudges the state slightly into the vapour region before retrying
+        A saturated tank sits exactly on the saturation curve, where pressure and
+        temperature are not independent and CoolProp cannot resolve a state from
+        the pair. That is a normal operating point for a blowdown tank, not an
+        error, so it is detected up front and evaluated as saturated vapour -
+        which is the correct property for vapour leaving the ullage anyway.
         """
+
+        # is this state on (or above) the saturation line for this temperature?
+        try:
+            saturation_pressure_pa = self.get_saturation_properties_from_temp(temperature_k)["psat"]
+        except ValueError:
+            saturation_pressure_pa = None
+
+        if (
+            saturation_pressure_pa is not None
+            and pressure_pa >= saturation_pressure_pa * (1.0 - SATURATION_PRESSURE_TOLERANCE)
+        ):
+            return self.get_saturated_vapour_gamma(temperature_k)
+
         try:
             # ratio of specific heats at some given pressure and temperature
             cp = PropsSI("Cpmass", "P", pressure_pa, "T", temperature_k, self.coolprop_key)
             cv = PropsSI("Cvmass", "P", pressure_pa, "T", temperature_k, self.coolprop_key)
-            
-            gamma = cp / cv
 
-            return gamma
+            return cp / cv
+
         except Exception as original_error:
 
-            try:
-                
-                psat = self.get_saturation_properties_from_temp(temperature_k)["psat"]
-
-                # if we are on/above saturation, nudge slightly into vapour region
-                nudged_pressure_pa = min(pressure_pa, 0.999 * psat)
-
-                cp = PropsSI("Cpmass", "P", nudged_pressure_pa, "T", temperature_k, self.coolprop_key)
-                cv = PropsSI("Cvmass", "P", nudged_pressure_pa, "T", temperature_k, self.coolprop_key)
-
-                gamma = cp / cv
-
-                return gamma
-
-            except Exception as fallback_error:
+            if saturation_pressure_pa is None:
                 raise RuntimeError(
-                    "get_gamma_at_PT failed. Inputs: \n"
+                    "get_gamma_at_PT failed and the state is not saturated. Inputs: \n"
                     f"Pressure: {pressure_pa:.2f} Pa\n"
                     f"Temperature: {temperature_k:.2f} K\n"
-                    f"Original error: {original_error}\n"
-                    f"Fallback error: {fallback_error}"
-                    )
+                    f"Original error: {original_error}"
+                ) from original_error
+
+            return self.get_saturated_vapour_gamma(temperature_k)
 
     
 
+
+    def get_Tmin(self) -> float:
+        # lowest temperature the fluid model is valid at
+        return PropsSI("Tmin", self.coolprop_key)
+
+    def get_Tmax(self) -> float:
+        # highest temperature the fluid model is valid at
+        return PropsSI("Tmax", self.coolprop_key)
 
     def get_Ttriple(self) -> float:
         # returns the triple point temperature

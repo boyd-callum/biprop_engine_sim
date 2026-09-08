@@ -1,3 +1,4 @@
+from __future__ import annotations
 from simulation import biprop_simulate
 from cases import full_biprop_case, squirtle_case
 

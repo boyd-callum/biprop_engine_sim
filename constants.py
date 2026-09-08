@@ -1,6 +1,10 @@
+from __future__ import annotations
 R_UNIVERSAL = 8.31446261815324
 ATMOSPHERE_PRESSURE_PA = 101325.0
 AMBIENT_TEMPERATURE_K = 300.0
 STANDARD_GRAVITY_M_S2 = 9.80665
 DRYOUT_TOLERANCE_KG = 1e-9
+
+# relative tolerance for deciding a state sits on the saturation line
+SATURATION_PRESSURE_TOLERANCE = 1e-6
 PI=3.14159265359

@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, TYPE_CHECKING
 import math
@@ -831,8 +832,17 @@ def trap_integrate(
         value0 = get_engine_value(point0, attributeName)
         value1 = get_engine_value(point1, attributeName)
 
-        if value0 is None or value1 is None:
+        if value1 is None:
+            # nothing known at the end of this interval - the burn has stopped
             continue
+
+        if value0 is None:
+            # The recorded initial condition carries no engine state, because the
+            # engine is only solved after the tanks have been advanced. The value
+            # at the end of the interval was computed from the tank state at its
+            # start, so it applies across the whole interval - hold it rather than
+            # skipping, which used to drop the first timestep from every integral.
+            value0 = value1
 
         dt = point1.time_s - point0.time_s
 

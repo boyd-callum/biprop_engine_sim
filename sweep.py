@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, replace
 import pandas as pd
 from typing import Callable
@@ -24,7 +26,7 @@ def run_1D_sweep(
     values: list[float],
     modify_case: Callable,
     parameter_name: str
-) -> pd.dataframe:
+) -> pd.DataFrame:
 
     results = []
 

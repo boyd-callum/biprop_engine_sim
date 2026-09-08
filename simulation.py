@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
@@ -10,7 +11,11 @@ from cases import SimCase
 from regulator import RegulatorConfig
 from constants import *
 from helpers import get_single_config_by_role, format_bar, format_force, get_tank_debug_string
-from timestep_advance import advance_propellant_tank, advance_pressurant_tank
+from timestep_advance import (
+    advance_propellant_tank,
+    advance_pressurant_tank,
+    get_propellant_injector_mdot_kg_s,
+)
 
 
 # -------------------------------
@@ -428,6 +433,10 @@ def biprop_simulate(
     engine.fuel_cea_name = fuel_tank_config.fluid.cea_name
     engine.ox_cea_name = ox_tank_config.fluid.cea_name
 
+    # clear any state left over from a previous run of this case, so repeated runs
+    # and sweeps are reproducible
+    engine.reset_state()
+
     if engine.state is None:
         raise ValueError("Engine is missing state.")
 
@@ -447,6 +456,32 @@ def biprop_simulate(
     # for printing live data
     step_index = 0
 
+    # Record the initial condition before advancing anything. Without this the
+    # first recorded point is at t = dt with the tanks already partly drained, so
+    # plots never show the state the case was actually set up with.
+    #
+    # The injector and regulator keys have to be present here even though nothing
+    # has flowed yet - the plotting and CSV code takes its column names from the
+    # first recorded point, so an empty dict would drop those series entirely.
+    if record:
+
+        initial_injector_mdots = {injector_id: 0.0 for injector_id in case.injector_configs}
+
+        initial_regulator_mdots = (
+            {regulator_id: 0.0} if regulator_id is not None else {}
+        )
+
+        sim_points.append(
+            SimPoint(
+                time_s=0.0,
+                # no engine state exists yet - nothing has been burned
+                engine=None,
+                tanks=tank_states.copy(),
+                injectors_mdot=initial_injector_mdots,
+                regulators_mdot=initial_regulator_mdots,
+            )
+        )
+
 
     # -----------
     # 7. main loop
@@ -459,7 +494,42 @@ def biprop_simulate(
 
         total_pressurant_mdot_kg_s = 0.0
 
-        downstream_pressure_pa = engine.state.chamber_pressure_pa
+        # -------------
+        # 7a-i. solve the chamber pressure against the current tank states
+        #
+        # The chamber is quasi-steady while the tanks carry the dynamics, so the
+        # injector/nozzle pressure balance is solved before anything is advanced.
+        # Taking last timestep's chamber pressure instead puts a one-step lag in
+        # the injector feedback loop, which oscillates once the injector pressure
+        # drop gets small late in a burn.
+
+        ox_tank_state = ox_tank_config.state
+        fuel_tank_state = fuel_tank_config.state
+
+        if ox_tank_state is None or fuel_tank_state is None:
+            raise ValueError("Propellant tank states are not initialised.")
+        if ox_tank_state.pressure_pa is None or fuel_tank_state.pressure_pa is None:
+            raise ValueError("Propellant tank states are missing pressure.")
+
+        max_feed_pressure_pa = max(
+            ox_tank_state.pressure_pa,
+            fuel_tank_state.pressure_pa
+        )
+
+        downstream_pressure_pa = engine.solve_chamber_pressure_pa(
+            ox_mdot_at_pressure=lambda pc: get_propellant_injector_mdot_kg_s(
+                tank_config=ox_tank_config,
+                injector_config=ox_injector_config,
+                downstream_pressure_pa=pc
+            ),
+            fuel_mdot_at_pressure=lambda pc: get_propellant_injector_mdot_kg_s(
+                tank_config=fuel_tank_config,
+                injector_config=fuel_injector_config,
+                downstream_pressure_pa=pc
+            ),
+            max_upstream_pressure_pa=max_feed_pressure_pa,
+            previous_chamber_pressure_pa=engine.state.chamber_pressure_pa,
+        )
 
 
         # -------------
@@ -576,6 +646,7 @@ def biprop_simulate(
                 fuel_mdot_kg_s=fuel_mdot_kg_s,
                 ambient_pressure_pa=ATMOSPHERE_PRESSURE_PA,
                 previous_state=engine.state,
+                chamber_pressure_pa=downstream_pressure_pa,
             )
 
         except Exception as exc:

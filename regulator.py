@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Literal
 from dataclasses import dataclass
 from fluid import Fluid

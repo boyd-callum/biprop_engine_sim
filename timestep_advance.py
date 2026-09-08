@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 
 from dataclasses import dataclass
@@ -7,6 +8,193 @@ from tanks import TankState, TankConfig
 from regulator import RegulatorConfig
 from constants import *
 
+
+# ------------------------------------------------------------------
+# Phase determination
+#
+# A saturated tank is two-phase whenever its bulk density sits above the
+# saturated-vapour density at the tank temperature. This is re-evaluated from
+# (mass, volume, temperature) every timestep and is never latched, so a tank
+# that re-condenses after an apparent dryout is picked back up correctly.
+
+
+@dataclass
+class SaturatedSplit:
+    is_two_phase: bool
+    liquid_mass_kg: float
+    vapour_mass_kg: float
+    vapour_mass_fraction: float     # quality by mass, 0 = all liquid, 1 = all vapour
+    saturation_properties: dict | None
+
+
+def get_saturated_split(
+    tank_config: TankConfig,
+    tank_state: TankState
+) -> SaturatedSplit:
+    """
+    Resolve the equilibrium liquid/vapour split of a saturated tank from its
+    current mass, volume and temperature.
+    """
+
+    if tank_state.total_mass_kg is None or tank_state.temperature_k is None:
+        raise ValueError("Tank state is missing total mass or temperature.")
+
+    total_mass_kg = tank_state.total_mass_kg
+
+    if total_mass_kg <= 0.0:
+        return SaturatedSplit(False, 0.0, 0.0, 1.0, None)
+
+    try:
+        saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(
+            tank_state.temperature_k
+        )
+    except ValueError:
+        # above the critical point or below the triple point - not saturated
+        return SaturatedSplit(False, 0.0, total_mass_kg, 1.0, None)
+
+    vf = saturation_properties["vf"]
+    vg = saturation_properties["vg"]
+
+    bulk_specific_volume_m3_kg = tank_config.tank_volume_m3 / total_mass_kg
+
+    # bulk specific volume at or beyond the saturated-vapour line means there is
+    # no liquid left and the fluid is superheated vapour
+    if bulk_specific_volume_m3_kg >= vg:
+        return SaturatedSplit(False, 0.0, total_mass_kg, 1.0, saturation_properties)
+
+    vapour_mass_kg = (tank_config.tank_volume_m3 - total_mass_kg * vf) / (vg - vf)
+
+    # clamp against round-off near the phase boundaries
+    vapour_mass_kg = min(max(vapour_mass_kg, 0.0), total_mass_kg)
+    liquid_mass_kg = total_mass_kg - vapour_mass_kg
+
+    return SaturatedSplit(
+        is_two_phase=True,
+        liquid_mass_kg=liquid_mass_kg,
+        vapour_mass_kg=vapour_mass_kg,
+        vapour_mass_fraction=vapour_mass_kg / total_mass_kg,
+        saturation_properties=saturation_properties,
+    )
+
+
+# Width of the blend band, in liquid volume fraction, over which the injector
+# inlet transitions from pure liquid to pure vapour. A real tank does not switch
+# instantaneously - as the liquid level reaches the outlet the injector ingests a
+# rising vapour fraction. Blending over a narrow band also keeps the chamber
+# pressure solve free of a step discontinuity at dryout.
+LIQUID_HANDOVER_VOLUME_FRACTION = 0.02
+
+
+def get_liquid_feed_weight(
+    tank_config: TankConfig,
+    split: SaturatedSplit
+) -> float:
+    """
+    Fraction of the injector inlet flow that is liquid, 1.0 while the outlet is
+    comfortably submerged and falling to 0.0 as the last liquid is drawn down.
+    """
+
+    if not split.is_two_phase:
+        return 0.0
+
+    if split.saturation_properties is None:
+        return 0.0
+
+    liquid_volume_m3 = split.liquid_mass_kg * split.saturation_properties["vf"]
+    liquid_volume_fraction = liquid_volume_m3 / tank_config.tank_volume_m3
+
+    if liquid_volume_fraction >= LIQUID_HANDOVER_VOLUME_FRACTION:
+        return 1.0
+
+    return liquid_volume_fraction / LIQUID_HANDOVER_VOLUME_FRACTION
+
+
+def get_blowdown_injector_mdot_kg_s(
+    tank_config: TankConfig,
+    injector_config: InjectorConfig,
+    downstream_pressure_pa: float,
+    tank_state: TankState | None = None
+) -> float:
+    """
+    Injector mass flow for a self-pressurised tank at its current state.
+
+    Pure - advances nothing and mutates nothing, so the chamber pressure solver
+    can evaluate it repeatedly at trial downstream pressures.
+    """
+
+    state = tank_state if tank_state is not None else tank_config.state
+
+    if state is None:
+        raise ValueError("Tank state is not initialised.")
+    if state.total_mass_kg is None or state.total_mass_kg <= 0.0:
+        return 0.0
+
+    split = get_saturated_split(tank_config, state)
+    liquid_weight = get_liquid_feed_weight(tank_config, split)
+
+    if liquid_weight >= 1.0:
+        return injector_config.get_dyer_mdot_kg_s(
+            tank_state=state,
+            downstream_pressure_pa=downstream_pressure_pa
+        )
+
+    gas_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
+        tank_state=state,
+        downstream_pressure_pa=downstream_pressure_pa
+    )
+
+    if liquid_weight <= 0.0:
+        return gas_mdot_kg_s
+
+    liquid_mdot_kg_s = injector_config.get_dyer_mdot_kg_s(
+        tank_state=state,
+        downstream_pressure_pa=downstream_pressure_pa
+    )
+
+    return liquid_weight * liquid_mdot_kg_s + (1.0 - liquid_weight) * gas_mdot_kg_s
+
+
+def get_propellant_injector_mdot_kg_s(
+    tank_config: TankConfig,
+    injector_config: InjectorConfig,
+    downstream_pressure_pa: float
+) -> float:
+    """
+    Injector mass flow for any propellant tank at its current state, without
+    advancing it. Used by the chamber pressure solver.
+    """
+
+    state = tank_config.state
+
+    if state is None:
+        raise ValueError("Tank state is not initialised.")
+
+    if tank_config.phase_model == "self_pressurised":
+        return get_blowdown_injector_mdot_kg_s(
+            tank_config=tank_config,
+            injector_config=injector_config,
+            downstream_pressure_pa=downstream_pressure_pa
+        )
+
+    if tank_config.phase_model == "pressurised_liquid":
+
+        if state.liquid_mass_kg is None or state.liquid_mass_kg <= 0.0:
+            return 0.0
+
+        return injector_config.get_liquid_mdot_kg_s(
+            tank_state=state,
+            downstream_pressure_pa=downstream_pressure_pa
+        )
+
+    if tank_config.phase_model == "single_phase":
+        return injector_config.get_gas_mdot_kg_s(
+            tank_state=state,
+            downstream_pressure_pa=downstream_pressure_pa
+        )
+
+    raise NotImplementedError(
+        f"Unsupported phase model '{tank_config.phase_model}' for tank {tank_config.name}"
+    )
 
 
 def gas_advance_timestep(
@@ -77,6 +265,18 @@ def blowdown_advance_timestep(
     dt_s: float,
     downstream_pressure_pa: float = ATMOSPHERE_PRESSURE_PA
 ) -> tuple[TankState, float]:
+    """
+    Advance a self-pressurised tank by one timestep.
+
+    The phase of the tank is resolved every timestep from its bulk density
+    against the saturated-vapour density at the tank temperature. Nothing is
+    latched: a tank that re-condenses after an apparent dryout is returned to the
+    two-phase model automatically.
+
+    Mass and energy always leave on the same assumption - the liquid/vapour split
+    of the outflow follows the same weighting used to blend the injector models,
+    so the enthalpy debited matches the fluid actually expelled.
+    """
 
     current_state = tank_config.state
 
@@ -86,184 +286,123 @@ def blowdown_advance_timestep(
         raise ValueError("Tank state is missing pressure or temperature.")
     if current_state.total_mass_kg is None or current_state.total_internal_energy_j is None:
         raise ValueError("Tank state is missing total mass or total internal energy.")
-    if current_state.liquid_mass_kg is None:
-        raise ValueError("Tank state is missing liquid mass.")
 
-    
-
-    tank_temperature_k = current_state.temperature_k
-    liquid_mass_kg = current_state.liquid_mass_kg
-
-    def advance_gas_from_state(
-        start_state: TankState,
-        gas_dt_s: float
-    ) -> tuple[TankState, float, float, float]:
-        """
-        Advances a gas-only state by gas_dt_s.
-
-        Returns:
-            new_state, gas_mdot_kg_s, gas_mass_out_kg, gas_energy_out_j
-        """
-
-        if gas_dt_s <= 0.0:
-            return start_state, 0.0, 0.0, 0.0
-
-        if start_state.total_mass_kg is None:
-            raise ValueError("Gas state is missing total mass.")
-        if start_state.total_internal_energy_j is None:
-            raise ValueError("Gas state is missing total internal energy.")
-        if start_state.temperature_k is None:
-            raise ValueError("Gas state is missing temperature.")
-        
-
-
-        if start_state.total_mass_kg <= 0.0:
-            return start_state, 0.0, 0.0, 0.0
-
-        gas_mdot_kg_s = injector_config.get_gas_mdot_kg_s(
-            tank_state=start_state,
-            downstream_pressure_pa=downstream_pressure_pa
-        )
-
-        gas_mass_out_kg = gas_mdot_kg_s * gas_dt_s
-
-        # Clamp so we never remove more mass than exists.
-        if gas_mass_out_kg > start_state.total_mass_kg:
-            gas_mass_out_kg = start_state.total_mass_kg
-            gas_mdot_kg_s = gas_mass_out_kg / gas_dt_s
-
-        gas_density_kg_m3 = start_state.total_mass_kg / tank_config.tank_volume_m3
-
-        gas_enthalpy_j_kg = tank_config.fluid.props_si(
-            "H",
-            "D",
-            gas_density_kg_m3,
-            "T",
-            start_state.temperature_k
-        )
-
-        gas_energy_out_j = gas_mass_out_kg * gas_enthalpy_j_kg
-
-        new_total_mass_kg = start_state.total_mass_kg - gas_mass_out_kg
-        new_total_internal_energy_j = (
-            start_state.total_internal_energy_j
-            - gas_energy_out_j
-        )
-
-        new_state = tank_config.state_from_mass_and_energy(
-            total_mass_kg=new_total_mass_kg,
-            total_internal_energy_j=new_total_internal_energy_j,
-            previous_state=start_state,
-            phase_override="single_phase"
-        )
-
-        return new_state, gas_mdot_kg_s, gas_mass_out_kg, gas_energy_out_j
-
-    # ------------------------------------------------------------------
-    # Case 1: tank is already gas-only at the start of the timestep
-
-    if liquid_mass_kg <= DRYOUT_TOLERANCE_KG:
-
-        new_tank_state, gas_mdot_kg_s, _, _ = advance_gas_from_state(
-            start_state=current_state,
-            gas_dt_s=dt_s
-        )
-
-        return new_tank_state, gas_mdot_kg_s
-
-    # ------------------------------------------------------------------
-    # Case 2: liquid exists at the start of the timestep
-
-    saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(
-        tank_temperature_k
-    )
-
-    liquid_mdot_kg_s = injector_config.get_dyer_mdot_kg_s(
-        tank_state=current_state,
-        downstream_pressure_pa=downstream_pressure_pa
-    )
-
-    if liquid_mdot_kg_s <= 0.0:
+    if current_state.total_mass_kg <= 0.0:
         return current_state, 0.0
 
-    full_step_liquid_mass_out_kg = liquid_mdot_kg_s * dt_s
+    split = get_saturated_split(tank_config, current_state)
+    liquid_weight = get_liquid_feed_weight(tank_config, split)
+
+    mdot_kg_s = get_blowdown_injector_mdot_kg_s(
+        tank_config=tank_config,
+        injector_config=injector_config,
+        downstream_pressure_pa=downstream_pressure_pa,
+        tank_state=current_state
+    )
+
+    if mdot_kg_s <= 0.0:
+        return current_state, 0.0
+
+    mass_out_kg = mdot_kg_s * dt_s
+
+    # never remove more mass than the tank holds
+    if mass_out_kg > current_state.total_mass_kg:
+        mass_out_kg = current_state.total_mass_kg
+        mdot_kg_s = mass_out_kg / dt_s
 
     # ------------------------------------------------------------------
-    # Case 2a: liquid remains for the whole timestep
+    # energy carried out by the departing mass
+    #
+    # The outflow is liquid_weight liquid and (1 - liquid_weight) vapour, matching
+    # how the injector models were blended, so mass and energy stay consistent.
 
-    if liquid_mass_kg > full_step_liquid_mass_out_kg + DRYOUT_TOLERANCE_KG:
+    if split.is_two_phase and split.saturation_properties is not None:
 
-        mass_out_kg = full_step_liquid_mass_out_kg
-        energy_out_j = mass_out_kg * saturation_properties["hf"]
+        saturation_properties = split.saturation_properties
 
-        new_total_mass_kg = current_state.total_mass_kg - mass_out_kg
-        new_total_internal_energy_j = (
-            current_state.total_internal_energy_j
-            - energy_out_j
+        outlet_enthalpy_j_kg = (
+            liquid_weight * saturation_properties["hf"]
+            + (1.0 - liquid_weight) * saturation_properties["hg"]
         )
 
-        new_tank_state = tank_config.state_from_mass_and_energy(
-            total_mass_kg=new_total_mass_kg,
-            total_internal_energy_j=new_total_internal_energy_j,
-            previous_state=current_state,
+    else:
+        # superheated vapour - use the real gas enthalpy at the bulk state
+        bulk_density_kg_m3 = current_state.total_mass_kg / tank_config.tank_volume_m3
+
+        outlet_enthalpy_j_kg = tank_config.fluid.get_fluid_enthalpy_from_density_temperature(
+            D=bulk_density_kg_m3,
+            T=current_state.temperature_k
+        )
+
+    energy_out_j = mass_out_kg * outlet_enthalpy_j_kg
+
+    new_total_mass_kg = current_state.total_mass_kg - mass_out_kg
+    new_total_internal_energy_j = current_state.total_internal_energy_j - energy_out_j
+
+    # ------------------------------------------------------------------
+    # reconstruct the new state, choosing the phase model from the result rather
+    # than from a persisted flag
+
+    new_tank_state = reconstruct_blowdown_state(
+        tank_config=tank_config,
+        total_mass_kg=new_total_mass_kg,
+        total_internal_energy_j=new_total_internal_energy_j,
+        previous_state=current_state
+    )
+
+    return new_tank_state, mdot_kg_s
+
+
+def reconstruct_blowdown_state(
+    tank_config: TankConfig,
+    total_mass_kg: float,
+    total_internal_energy_j: float,
+    previous_state: TankState
+) -> TankState:
+    """
+    Rebuild a self-pressurised tank state from mass and energy, selecting the
+    two-phase or single-phase solver based on which one the result is consistent
+    with. Falls back to the single-phase solver if the saturated solve cannot
+    represent the state.
+    """
+
+    if total_mass_kg <= 0.0:
+        raise ValueError(f"Tank {tank_config.name} ran out of mass.")
+
+    bulk_specific_volume_m3_kg = tank_config.tank_volume_m3 / total_mass_kg
+
+    # a state can only be two-phase if its bulk specific volume falls between the
+    # saturated liquid and saturated vapour lines somewhere on the dome
+    try:
+        saturated_state = tank_config.state_from_mass_and_energy(
+            total_mass_kg=total_mass_kg,
+            total_internal_energy_j=total_internal_energy_j,
+            previous_state=previous_state,
             phase_override="self_pressurised"
         )
 
-        return new_tank_state, liquid_mdot_kg_s
+        if (
+            saturated_state.temperature_k is not None
+            and saturated_state.liquid_mass_kg is not None
+            and saturated_state.liquid_mass_kg > 0.0
+        ):
+            saturation_properties = tank_config.fluid.get_saturation_properties_from_temp(
+                saturated_state.temperature_k
+            )
 
-    # ------------------------------------------------------------------
-    # Case 2b: dryout occurs inside this timestep
+            if bulk_specific_volume_m3_kg < saturation_properties["vg"]:
+                return saturated_state
 
-    liquid_time_s = liquid_mass_kg / liquid_mdot_kg_s
-    liquid_time_s = max(0.0, min(liquid_time_s, dt_s))
+    except (ValueError, RuntimeError):
+        pass
 
-    gas_time_s = dt_s - liquid_time_s
-
-    # First remove exactly the remaining liquid.
-    liquid_mass_out_kg = liquid_mass_kg
-    liquid_energy_out_j = liquid_mass_out_kg * saturation_properties["hf"]
-
-    dryout_total_mass_kg = current_state.total_mass_kg - liquid_mass_out_kg
-    dryout_total_internal_energy_j = (
-        current_state.total_internal_energy_j
-        - liquid_energy_out_j
-    )
-
-    # Reconstruct the intermediate dryout state as gas-only.
-    dryout_state = tank_config.state_from_mass_and_energy(
-        total_mass_kg=dryout_total_mass_kg,
-        total_internal_energy_j=dryout_total_internal_energy_j,
-        previous_state=current_state,
+    # no valid saturated state - the tank is superheated vapour
+    return tank_config.state_from_mass_and_energy(
+        total_mass_kg=total_mass_kg,
+        total_internal_energy_j=total_internal_energy_j,
+        previous_state=previous_state,
         phase_override="single_phase"
     )
-
-    # Since this is explicitly the dryout point, do not allow a tiny
-    # reconstructed liquid mass to carry through this timestep.
-    dryout_state.liquid_mass_kg = 0.0
-
-    # Then use gas discharge for the remaining part of the timestep.
-    (
-        final_state,
-        gas_mdot_kg_s,
-        gas_mass_out_kg,
-        gas_energy_out_j
-    ) = advance_gas_from_state(
-        start_state=dryout_state,
-        gas_dt_s=gas_time_s
-    )
-
-    final_state.liquid_mass_kg = 0.0
-
-    total_mass_out_kg = liquid_mass_out_kg + gas_mass_out_kg
-
-    # Return timestep-averaged injector mdot so the rest of the sim does not
-    # need to know that this timestep was internally split.
-    average_injector_mdot_kg_s = total_mass_out_kg / dt_s
-
-    return final_state, average_injector_mdot_kg_s
-    
-
-
 
 
 def advance_pressurant_tank(

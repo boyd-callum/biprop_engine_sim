@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 from fluid import Fluid
 from tanks import TankState
@@ -27,11 +28,15 @@ class InjectorConfig:
     def get_SPI_mdot_kg_s(
             self,
             tank_state: TankState,
-            downstream_pressure_pa: float
+            downstream_pressure_pa: float,
+            saturation_properties: dict | None = None
     ) -> float:
 
         """
         mdot_spi = Cd * A_inj * sqrt(2*rho*delta_P)
+
+        saturation_properties may be passed in when the caller has already looked
+        them up, to avoid repeating the CoolProp calls.
         """
 
 
@@ -41,7 +46,8 @@ class InjectorConfig:
         if temperature_k is None or upstream_pressure_pa is None:
             raise ValueError("Tank state is missing pressure or temperature.")
 
-        saturation_properties = tank_state.config.fluid.get_saturation_properties_from_temp(temperature_k)
+        if saturation_properties is None:
+            saturation_properties = tank_state.config.fluid.get_saturation_properties_from_temp(temperature_k)
 
         density_kg_m3 = 1.0 / saturation_properties['vf']
 
@@ -109,6 +115,52 @@ class InjectorConfig:
         return mdot_kg_s
 
 
+    def get_dyer_k(
+            self,
+            tank_state: TankState,
+            downstream_pressure_pa: float,
+            saturation_properties: dict | None = None
+    ) -> float:
+        """
+        Dyer/NHNE weighting parameter.
+
+            k = sqrt( (P1 - P2) / (Pv - P2) )
+
+        where Pv is the vapour pressure at the injector inlet temperature. k > 1
+        favours the incompressible (SPI) model, k < 1 favours flashing (HEM).
+
+        For a self-pressurised tank the inlet is saturated, so P1 = Pv and k is
+        exactly 1 - the two models weight equally. Hard-coding k = 2 for such a
+        tank over-weights SPI and over-predicts mass flow by 14-18%.
+        """
+
+        upstream_pressure_pa = tank_state.pressure_pa
+        upstream_temperature_k = tank_state.temperature_k
+
+        if upstream_pressure_pa is None or upstream_temperature_k is None:
+            raise ValueError("Tank state is missing pressure or temperature.")
+
+        try:
+            if saturation_properties is None:
+                saturation_properties = tank_state.config.fluid.get_saturation_properties_from_temp(
+                    upstream_temperature_k
+                )
+            vapour_pressure_pa = saturation_properties["psat"]
+        except ValueError:
+            # no vapour pressure available - fall back to the configured value
+            return self.k
+
+        numerator_pa = upstream_pressure_pa - downstream_pressure_pa
+        denominator_pa = vapour_pressure_pa - downstream_pressure_pa
+
+        if numerator_pa <= 0.0 or denominator_pa <= 0.0:
+            # downstream at or above the vapour pressure, so nothing flashes and the
+            # weighting is undefined - fall back to the configured value
+            return self.k
+
+        return math.sqrt(numerator_pa / denominator_pa)
+
+
     def get_dyer_mdot_kg_s(
             self,
             tank_state: TankState,
@@ -122,12 +174,27 @@ class InjectorConfig:
             downstream_pressure_pa = downstream_pressure_pa
         )
 
+        # one saturation lookup shared by the SPI model and the weighting
+        saturation_properties = None
+        if tank_state.temperature_k is not None:
+            try:
+                saturation_properties = tank_state.config.fluid.get_saturation_properties_from_temp(
+                    tank_state.temperature_k
+                )
+            except ValueError:
+                saturation_properties = None
+
         mdot_SPI_kg_s = self.get_SPI_mdot_kg_s(
             tank_state = tank_state,
-            downstream_pressure_pa = downstream_pressure_pa
+            downstream_pressure_pa = downstream_pressure_pa,
+            saturation_properties = saturation_properties
         )
 
-        k = self.k
+        k = self.get_dyer_k(
+            tank_state = tank_state,
+            downstream_pressure_pa = downstream_pressure_pa,
+            saturation_properties = saturation_properties
+        )
 
         # formula from https://wikis.mit.edu/confluence/display/RocketTeam/Modeling
         mdot_dyer_ks_s = (k * mdot_SPI_kg_s + mdot_HEM_kg_s) / (1.0 + k)

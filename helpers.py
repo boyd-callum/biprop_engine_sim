@@ -9,9 +9,112 @@ if TYPE_CHECKING:
     from regulator import RegulatorConfig, PropellantRole
 
 
+def brent_search(
+        residual_func: Callable,
+        bounds: list,
+        max_iterations: int = 100,
+        tolerance: float = 1e-3,
+        x_tolerance: float = 0.0,
+        ) -> float:
+    """
+    Bracketed root search using Brent's method.
+
+    Same contract as bisection_search - the bounds must bracket a sign change -
+    but it interpolates instead of always halving, so it converges superlinearly.
+    Typically 6-8 evaluations where bisection needs 20-40, which matters when each
+    evaluation is a CoolProp or CEA call.
+
+    Falls back to a bisection step whenever interpolation would leave the bracket
+    or is not shrinking it, so it can never do worse than bisection.
+
+    tolerance   - stop once |residual| is below this
+    x_tolerance - stop once the bracket is narrower than this
+    """
+
+    a = bounds[0]
+    b = bounds[1]
+
+    fa = residual_func(a)
+    fb = residual_func(b)
+
+    if fa == 0.0:
+        return a
+    if fb == 0.0:
+        return b
+
+    if fa * fb > 0.0:
+        raise ValueError(
+            f"Brent bounds do not bracket a root: f({a})={fa}, f({b})={fb}"
+        )
+
+    # b is kept as the best estimate, a as the contrapoint
+    if abs(fa) < abs(fb):
+        a, b = b, a
+        fa, fb = fb, fa
+
+    c, fc = a, fa
+    used_bisection = True
+    step = 0.0
+
+    for _ in range(max_iterations):
+
+        if abs(fb) < tolerance:
+            return b
+
+        if x_tolerance > 0.0 and abs(b - a) < x_tolerance:
+            return b
+
+        if fa != fc and fb != fc:
+            # inverse quadratic interpolation
+            s = (
+                a * fb * fc / ((fa - fb) * (fa - fc))
+                + b * fa * fc / ((fb - fa) * (fb - fc))
+                + c * fa * fb / ((fc - fa) * (fc - fb))
+            )
+        elif fb != fa:
+            # secant
+            s = b - fb * (b - a) / (fb - fa)
+        else:
+            s = 0.5 * (a + b)
+
+        # reject the interpolated step if it leaves the bracket or is not shrinking
+        # the interval fast enough, and bisect instead
+        lower = min((3.0 * a + b) / 4.0, b)
+        upper = max((3.0 * a + b) / 4.0, b)
+
+        reject = (
+            not (lower < s < upper)
+            or (used_bisection and abs(s - b) >= 0.5 * abs(step))
+            or (not used_bisection and abs(s - b) >= 0.5 * abs(c - b))
+        )
+
+        if reject:
+            s = 0.5 * (a + b)
+            used_bisection = True
+        else:
+            used_bisection = False
+
+        step = b - c
+
+        fs = residual_func(s)
+
+        c, fc = b, fb
+
+        if fa * fs < 0.0:
+            b, fb = s, fs
+        else:
+            a, fa = s, fs
+
+        if abs(fa) < abs(fb):
+            a, b = b, a
+            fa, fb = fb, fa
+
+    return b
+
+
 def bisection_search(
-        residual_func: Callable, 
-        bounds: list, 
+        residual_func: Callable,
+        bounds: list,
         max_iterations: int = 100,
         tolerance: float = 1e-3
         ) -> float:
