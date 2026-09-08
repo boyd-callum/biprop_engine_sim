@@ -336,7 +336,7 @@ squirtle_case = SimCase(
     
     engine_config=squirtle_engine,
 
-    settings=SimulationSettings(dt_s=0.02, t_final_s=15, print_steps=50, print_updates=False)
+    settings=SimulationSettings(dt_s=0.02, t_final_s=15, print_steps=50, print_updates=True)
 
 )
 

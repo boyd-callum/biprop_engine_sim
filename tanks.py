@@ -6,7 +6,7 @@ from typing import Literal, Callable
 
 from constants import *
 from fluid import Fluid
-from helpers import bisection_search, brent_search
+from helpers import brent_search
 
 # -------------------------------
 # Solver settings
@@ -20,25 +20,56 @@ TEMPERATURE_BRACKET_FRACTION = 0.05
 # how far the bracket is allowed to widen before giving up
 TEMPERATURE_BRACKET_MAX_EXPANSIONS = 12
 
+# how far inside the dome the saturated bracket is held - properties are
+# undefined exactly at the triple and critical points
+SATURATION_BRACKET_MARGIN_K = 0.01
 
-def solve_temperature_at_density(
-    fluid: Fluid,
+# convergence of the dew-point temperature solve, in kelvin
+DEW_TEMPERATURE_TOLERANCE_K = 1e-9
+
+# convergence of the saturated-tank energy solve, in joules
+SATURATED_ENERGY_TOLERANCE_J = 1e-3
+
+# convergence of the pressurised-liquid energy solve, in joules
+PRESSURISED_LIQUID_ENERGY_TOLERANCE_J = 1e-2
+
+# convergence of the ullage pressure fixed point, in pascals
+PRESSURE_FIXED_POINT_TOLERANCE_PA = 1e-3
+
+# passes of the pressure fixed point before falling back to a bracketed search
+PRESSURE_FIXED_POINT_MAX_ITERATIONS = 20
+
+# convergence of that fallback search, as an unfilled tank volume
+PRESSURE_RESIDUAL_TOLERANCE_M3 = 1e-9
+
+
+def solve_temperature_from_guess(
     residual_func: Callable[[float], float],
     temperature_guess_k: float,
+    minimum_temperature_k: float,
+    maximum_temperature_k: float,
+    tolerance: float = 1e-3,
     tank_name: str = "tank",
 ) -> float:
     """
     Solve for the temperature that zeroes a residual, bracketing outward from a
-    guess and never evaluating outside the fluid model's valid range.
+    guess and never evaluating outside the given valid range.
 
-    CoolProp extrapolates silently outside that range instead of raising, so a
-    solver given wide fixed bounds can converge on physically meaningless states.
-    Bounds here come from the fluid's own limits and the bracket starts narrow
-    around the previous temperature, which is normally within a degree or two.
+    Growing the bracket from the previous temperature rather than starting from
+    the full valid range matters for two reasons:
+
+      - CoolProp extrapolates silently outside its range instead of raising, so a
+        solver given wide fixed bounds can converge on physically meaningless
+        states.
+      - The residuals here are not globally monotonic. The saturated energy in
+        particular turns over near the critical point once the phase split clamps,
+        so the two ends of the full range can share a sign even though a root
+        exists near the previous temperature. A bracketing solver evaluates its
+        endpoints and would refuse the whole solve.
+
+    Both of those are invisible to a plain bisection that only ever probes
+    midpoints, which is how the original code got away with them.
     """
-
-    minimum_temperature_k = fluid.get_Tmin()
-    maximum_temperature_k = fluid.get_Tmax()
 
     temperature_guess_k = min(
         max(temperature_guess_k, minimum_temperature_k),
@@ -59,7 +90,7 @@ def solve_temperature_at_density(
             return brent_search(
                 residual_func=residual_func,
                 bounds=[low_k, high_k],
-                tolerance=1e-3,
+                tolerance=tolerance,
             )
 
         if low_k <= minimum_temperature_k and high_k >= maximum_temperature_k:
@@ -148,6 +179,51 @@ class TankConfig:
         mass_liquid_kg = total_mass_kg - mass_vapour_kg
 
         return mass_liquid_kg, mass_vapour_kg
+
+
+    def get_dew_temperature_k(
+            self,
+            total_mass_kg: float
+    ) -> float:
+        """
+        The temperature at which this tank's bulk specific volume meets the
+        saturated-vapour line - the top of the dome for this fill level.
+
+        Above it the tank is superheated vapour and the two-phase model does not
+        apply, so this is the upper bound of any saturated solve. Bounding the
+        search here is what keeps it single-rooted: the clamped energy carries a
+        second, spurious root in the all-vapour region above this temperature,
+        where the state is not on the dome at all.
+        """
+
+        bulk_specific_volume_m3_kg = self.tank_volume_m3 / total_mass_kg
+
+        lowest_temperature_k = self.fluid.get_Ttriple() + SATURATION_BRACKET_MARGIN_K
+        highest_temperature_k = self.fluid.get_Tcrit() - SATURATION_BRACKET_MARGIN_K
+
+        def vapour_volume_residual(temperature_k: float) -> float:
+            saturation_properties = self.fluid.get_saturation_properties_from_temp(temperature_k)
+            return saturation_properties['vg'] - bulk_specific_volume_m3_kg
+
+        # vg falls monotonically with temperature, so this has at most one root
+        if vapour_volume_residual(highest_temperature_k) > 0.0:
+            # saturated vapour is still less dense than the tank right up to the
+            # critical point - the dome is available across the whole range
+            return highest_temperature_k
+
+        if vapour_volume_residual(lowest_temperature_k) < 0.0:
+            raise ValueError(
+                f"{self.name} bulk specific volume "
+                f"{bulk_specific_volume_m3_kg:.6e} m^3/kg is below the saturated "
+                f"vapour line across the whole dome - no two-phase state exists."
+            )
+
+        return brent_search(
+            residual_func=vapour_volume_residual,
+            bounds=[lowest_temperature_k, highest_temperature_k],
+            tolerance=0.0,
+            x_tolerance=DEW_TEMPERATURE_TOLERANCE_K,
+        )
 
 
     def calculate_internal_energy(
@@ -415,35 +491,43 @@ class TankConfig:
         else:
             guessed_temperature_k = self.fluid.get_Ttriple() + 10.0   # arbitrary guess above the triple point
 
-        # find the total internal energy at the guessed energy
+        def energy_residual_j(temperature_k: float) -> float:
+            return (
+                self.calculate_internal_energy(total_mass_kg, temperature_k)
+                - total_internal_energy_j
+            )
 
-        guessed_energy_j = self.calculate_internal_energy(total_mass_kg, guessed_temperature_k)
+        # Find the saturation temperature that carries the right internal energy at
+        # this mass. Only the dome is valid, so that is the bracket.
+        #
+        # This was a hand-rolled bisection that halved a ~130 K span down to an
+        # absolute 1e-3 J tolerance on an energy of order 1e6 J - roughly 40
+        # iterations, each of which is a full saturation property lookup. Brent
+        # gets the same answer in well under half that.
+        #
+        # Both bounds are held just inside the dome. Saturation properties are
+        # undefined AT the triple point and the critical point, and unlike the old
+        # bisection - which only ever evaluated midpoints - a bracketing solver
+        # evaluates the endpoints themselves.
+        # Bound the search by the dome itself: from just above the triple point up
+        # to the dew temperature for this fill level. Inside that range the energy
+        # is monotonic in temperature and there is exactly one root.
+        #
+        # The old bisection used the full triple-to-critical span. That span also
+        # contains a second, spurious root above the dew point, where the phase
+        # split has clamped to all-vapour and the energy follows ug(T) back down
+        # through the target. Bisection happened to converge on the physical root
+        # from its starting side; anything that examines the endpoints does not.
+        lowest_temperature_k = self.fluid.get_Ttriple() + SATURATION_BRACKET_MARGIN_K
+        dew_temperature_k = self.get_dew_temperature_k(total_mass_kg)
 
-        # now need to root search to find the temperature which gives the correct internal energy for the given mass, using a bisection method
+        temperature_k = brent_search(
+            residual_func=energy_residual_j,
+            bounds=[lowest_temperature_k, dew_temperature_k],
+            tolerance=SATURATED_ENERGY_TOLERANCE_J,
+        )
 
-        T_low_k = self.fluid.get_Ttriple()
-        T_high_k = self.fluid.get_Tcrit() - 0.01
-
-        energy_error_j = guessed_energy_j - total_internal_energy_j
-        iteration = 0
-
-        while abs(energy_error_j) > 1e-3:
-            if energy_error_j > 0.0:
-                T_high_k = guessed_temperature_k
-            else:
-                T_low_k = guessed_temperature_k
-            
-            guessed_temperature_k = 0.5 * (T_low_k + T_high_k)
-            guessed_energy_j = self.calculate_internal_energy(total_mass_kg, guessed_temperature_k)
-            energy_error_j = guessed_energy_j - total_internal_energy_j
-            iteration += 1
-        
-            if iteration > 100:
-                raise RuntimeError(f"Root search failed to converge after 100 iterations. Final energy error of {energy_error_j} J.")
-        
-        # at this point guessed_temperature_k should be the temperature which gives the correct internal energy for the given mass, so we can calculate the rest of the state properties at this temperature
-
-        correct_temperature_k = guessed_temperature_k
+        correct_temperature_k = temperature_k
 
         saturation_properties = self.fluid.get_saturation_properties_from_temp(correct_temperature_k)
 
@@ -564,10 +648,11 @@ class TankConfig:
         # (U for nitrogen at D = 300, T = 10 K comes back as -3.1e20 J/kg). The
         # bisection then "worked" only because that garbage happened to sit on the
         # far side of the root.
-        temperature_k = solve_temperature_at_density(
-            fluid=self.fluid,
+        temperature_k = solve_temperature_from_guess(
             residual_func=temperature_residual,
             temperature_guess_k=temperature_guess_k,
+            minimum_temperature_k=self.fluid.get_Tmin(),
+            maximum_temperature_k=self.fluid.get_Tmax(),
             tank_name=self.name,
         )
 
@@ -617,6 +702,43 @@ class TankConfig:
         else:
             temperature_guess_k = 300.0
 
+        # Seed for the pressure fixed point. The temperature solve calls it many
+        # times at nearby temperatures, so carrying the last answer forward means
+        # it usually starts within a few hundred Pa of the root.
+        if previous_state is not None and previous_state.pressure_pa is not None:
+            previous_pressure_guess_pa = [previous_state.pressure_pa]
+        else:
+            previous_pressure_guess_pa = [ATMOSPHERE_PRESSURE_PA * 10.0]
+
+
+        def pressure_residual_for_temperature(
+                pressure_pa: float,
+                temperature_k: float
+            ) -> float:
+            """
+            Unfilled tank volume at this pressure and temperature. Zero when the
+            liquid and the ullage gas exactly fill the tank.
+            """
+
+            if self.pressurant_fluid is None:
+                raise ValueError
+
+            try:
+                liquid_density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
+                    P=pressure_pa,
+                    T=temperature_k
+                )
+                gas_density_kg_m3 = self.pressurant_fluid.get_fluid_density_from_pressure_temperature(
+                    P=pressure_pa,
+                    T=temperature_k
+                )
+            except Exception:
+                return 1e30
+
+            liquid_volume_m3 = liquid_mass_kg / liquid_density_kg_m3
+            gas_volume_m3 = pressurant_gas_mass_kg / gas_density_kg_m3
+
+            return self.tank_volume_m3 - liquid_volume_m3 - gas_volume_m3
 
 
         def solve_pressure_for_temperature(
@@ -624,41 +746,68 @@ class TankConfig:
             ) -> float:
 
             """
-            with a given temperature, finds the pressure for which that temperature is a valid tank state
+            With a given temperature, find the pressure at which the liquid and the
+            ullage gas exactly fill the tank.
+
+            This used to be a bisection over [1e4, 1e8] Pa to a 1e-9 m^3 tolerance -
+            around 24 iterations, each costing two real-fluid density evaluations,
+            run once per iteration of the temperature solve above it. That nested
+            pair was about 80% of the whole simulation's runtime.
+
+            It does not need a search. The volume constraint can be inverted
+            directly: the liquid volume fixes the ullage volume, the ullage volume
+            and the pressurant mass fix the gas density, and the gas density with
+            the temperature gives the pressure. Only the liquid density depends on
+            the pressure, and for a liquid that dependence is very weak, so
+            iterating on it converges in two or three passes.
             """
 
-            def pressure_residual(
-                    pressure_pa:float
-                )-> float:
+            if self.pressurant_fluid is None:
+                raise ValueError
 
-                if self.pressurant_fluid is None:
-                    raise ValueError
+            pressure_pa = previous_pressure_guess_pa[0]
 
-                try:
-                    liquid_density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
-                        P=pressure_pa,
-                        T=temperature_k
-                    )
-                    gas_density_kg_m3 = self.pressurant_fluid.get_fluid_density_from_pressure_temperature(
-                        P=pressure_pa,
-                        T=temperature_k
-                    )
-                except Exception:
-                    return 1e30
+            for _ in range(PRESSURE_FIXED_POINT_MAX_ITERATIONS):
 
+                liquid_density_kg_m3 = self.fluid.get_fluid_density_from_pressure_temperature(
+                    P=pressure_pa,
+                    T=temperature_k
+                )
 
-                liquid_volume_m3 = liquid_mass_kg / liquid_density_kg_m3
-                gas_volume_m3 = pressurant_gas_mass_kg / gas_density_kg_m3
+                ullage_volume_m3 = self.tank_volume_m3 - liquid_mass_kg / liquid_density_kg_m3
 
-                return self.tank_volume_m3 - liquid_volume_m3 - gas_volume_m3
+                if ullage_volume_m3 <= 0.0:
+                    # liquid alone over-fills the tank at this pressure - fall back
+                    # to the bracketed search, which can cope with it
+                    break
 
+                gas_density_kg_m3 = pressurant_gas_mass_kg / ullage_volume_m3
 
-            pressure_pa = bisection_search(
-                residual_func=pressure_residual,
-                bounds = [1e4, 1e8],
-                tolerance=1e-9
+                new_pressure_pa = self.pressurant_fluid.props_si(
+                    "P", "D", gas_density_kg_m3, "T", temperature_k
+                )
+
+                converged = (
+                    abs(new_pressure_pa - pressure_pa)
+                    <= PRESSURE_FIXED_POINT_TOLERANCE_PA
+                )
+
+                pressure_pa = new_pressure_pa
+
+                if converged:
+                    previous_pressure_guess_pa[0] = pressure_pa
+                    return pressure_pa
+
+            # Did not settle - fall back to the original bracketed search so a hard
+            # case still gets an answer rather than a half-converged guess.
+            pressure_pa = brent_search(
+                residual_func=lambda p: pressure_residual_for_temperature(p, temperature_k),
+                bounds=[1e4, 1e8],
+                tolerance=PRESSURE_RESIDUAL_TOLERANCE_M3
             )
-        
+
+            previous_pressure_guess_pa[0] = pressure_pa
+
             return pressure_pa
         
 
@@ -692,10 +841,10 @@ class TankConfig:
         temp_low_k = max(temperature_guess_k - 40.0, 250.0)
         temp_high_k = min(temperature_guess_k + 40.0, 450.0)
 
-        temperature_k = bisection_search(
+        temperature_k = brent_search(
             residual_func=temperature_residual,
             bounds=[temp_low_k, temp_high_k],
-            tolerance=1e-2
+            tolerance=PRESSURISED_LIQUID_ENERGY_TOLERANCE_J
         )
 
         pressure_pa = solve_pressure_for_temperature(temperature_k)
