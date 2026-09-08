@@ -27,18 +27,18 @@ if __name__ == "__main__":
         liquidTankName="n2o_tank"
     )
 
-    plot_linkedin_summary(
-        sim_record,
-        oxidiserInjectorName="n2o_injector",
-        fuelInjectorName="ethanol_injector",
-        file_path="plots/squirtle_linkedin_summary.png",
-    )
-
-    # plot_sim_record(
-    #     simRecord=sim_record,
-    #     file_path=f"plots/{case.name}_test_results.png",
-    #     show=False
+    # plot_linkedin_summary(
+    #     sim_record,
+    #     oxidiserInjectorName="n2o_injector",
+    #     fuelInjectorName="ethanol_injector",
+    #     file_path="plots/squirtle_linkedin_summary.png",
     # )
+
+    plot_sim_record(
+        simRecord=sim_record,
+        file_path=f"plots/{case.name}_test_results.png",
+        show=False
+    )
 
     # log_results(
     #     file_path=f"logs/{case.name}_results.csv",

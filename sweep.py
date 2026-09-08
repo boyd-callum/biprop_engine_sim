@@ -6,6 +6,7 @@ from typing import Callable
 from pathlib import Path
 import matplotlib.pyplot as plt
 import math
+import itertools
 
 from cases import SimCase
 
@@ -35,6 +36,9 @@ def run_1D_sweep(
         case = modify_case(base_case, value)
 
         sim_record = biprop_simulate(case)
+
+        if sim_record is None:
+            raise ValueError("Simulation completed without recording.")
 
         summary = calculate_sim_summary(sim_record, liquidTankName="n2o_tank")
 
@@ -138,6 +142,29 @@ def plot_standard_1D_sweep_outputs(
         file_path=f"plots/{file_prefix}_vs_liquid_pc.png"
     )
 
+
+
+@dataclass
+class SweepParameter:
+    parameter_name: str
+    modify_case: Callable
+    values: list[float]
+
+
+
+def run_N_dimension_sweep(
+    base_case: SimCase,
+    sweep_parameters: list[SweepParameter]
+    )-> pd.DataFrame:
+
+
+    results = []
+
+    
+
+    raise NotImplementedError("N dimension sweep not yet implemented")
+
+
 def set_n2o_injector_area(
     case: SimCase,
     area_mm2: float
@@ -187,6 +214,15 @@ def set_throat_diameter(
     diameter_m = diameter_mm * 1e-3
     throat_area_m2 = math.pi * diameter_m**2 / 4
 
+    if case.engine_config is None:
+        raise ValueError("Engine config is not set in the case.")
+    
+    print(
+        f"Changing throat area from "
+        f"{case.engine_config.geometry.nozzle_throat_area_m2:.6f} m^2 "
+        f"to {throat_area_m2:.6f} m^2"
+    )
+
     geometry = replace(
         case.engine_config.geometry,
         nozzle_throat_area_m2=throat_area_m2,
@@ -208,6 +244,9 @@ def set_ethanol_pressure(
 ) -> SimCase:
 
     pressure_pa = pressure_bar * 1e5
+
+    if case.regulator_configs is None:
+        raise ValueError("Regulator configs are not set in the case.")
 
     regulator = replace(
         case.regulator_configs["ethanol_regulator"],
@@ -291,6 +330,9 @@ def set_expansion_ratio(
     case: SimCase,
     expansion_ratio: float,
 ) -> SimCase:
+
+    if case.engine_config is None:
+        raise ValueError("Engine config is not set in the case.")
 
     geometry = replace(
         case.engine_config.geometry,
